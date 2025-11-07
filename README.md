@@ -5,13 +5,13 @@
 ![Review-ezgif com-optimize](https://github.com/user-attachments/assets/487157de-bf71-4bc9-9e49-16a4f0a14472)
 | | | |
 |:--:|:--:|:--:|
-| <img src="https://github.com/user-attachments/assets/54d1ed31-da1d-427f-ad11-66a26788c838" height="645"/> | <img src="https://github.com/user-attachments/assets/bb092569-0a7f-47f6-b7e9-c07ea56949cf" height="700"/> | <img src="https://github.com/user-attachments/assets/02b830e3-292f-4880-91f2-86ec818b877a" height="700"/> |
+| <img src="https://github.com/user-attachments/assets/7fcfd485-bcd4-46f9-887a-0a972dce3be3" height="700"/> | <img src="https://github.com/user-attachments/assets/bb092569-0a7f-47f6-b7e9-c07ea56949cf" height="700"/> | <img src="https://github.com/user-attachments/assets/02b830e3-292f-4880-91f2-86ec818b877a" height="700"/> |
 
 
 ## 🤝 参与贡献
 感谢 GD音乐台(music.gdstudio.xyz)提供的免费API
 
-感谢 来自Linux.do 牛就是牛@ufoo 大佬 https://linux.do/t/topic/942415提供的灵感
+感谢 来自Linux.do 牛就是牛@ufoo 大佬 https://linux.do/t/topic/942415 提供的灵感
 
 
 ## 🌟 主要特性
@@ -41,11 +41,10 @@
 - 🔗 API 基地址定义在 index.html 中的 `API.baseUrl`（约 1300 行），可替换为自建接口域名。
 - 🎚️ 默认主题、播放模式等偏好可在 `state` 初始化逻辑中按需调整。
 
-## 🔐 访问控制建议
-- 若希望为站点加密访问，可在 Cloudflare Pages 站点设置中启用 **访问策略**，随后点击“管理”跳转至 Cloudflare Zero Trust。
-- 在 Zero Trust 控制台中新建策略，设置登录验证并限制仅允许特定邮箱访问。
-- 详细步骤可参考指南：https://blog.galois21.com/archives/2360 。
-- 配置了策略一定要在Zero Trust-应用程序里确认是否绑定 不绑定不生效
+## 🔐 访问控制设置
+- 在 Cloudflare Pages 项目的 **Settings → Functions → Environment variables** 中新增名为 `PASSWORD` 的环境变量，值为希望设置的访问口令。
+- 变量保存后重新部署站点，未登录的访问者会被自动重定向到 `/login` 页面并需输入该口令。
+- 若后续想关闭访问口令，只需在同一位置删除 `PASSWORD` 环境变量并重新部署。
 ## 🎵 使用流程
 1. 输入关键词并选择想要的曲库后发起搜索。
 2. 在结果列表中可试听、播放、下载或加入播放队列。
