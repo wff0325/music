@@ -5,6 +5,8 @@ const dom = {
     backgroundTransitionLayer: document.getElementById("backgroundTransitionLayer"),
     playlist: document.getElementById("playlist"),
     playlistItems: document.getElementById("playlistItems"),
+    favorites: document.getElementById("favorites"),
+    favoriteItems: document.getElementById("favoriteItems"),
     lyrics: document.getElementById("lyrics"),
     lyricsScroll: document.getElementById("lyricsScroll"),
     lyricsContent: document.getElementById("lyricsContent"),
@@ -30,6 +32,9 @@ const dom = {
     debugInfo: document.getElementById("debugInfo"),
     importSelectedBtn: document.getElementById("importSelectedBtn"),
     importSelectedCount: document.getElementById("importSelectedCount"),
+    importSelectedMenu: document.getElementById("importSelectedMenu"),
+    importToPlaylist: document.getElementById("importToPlaylist"),
+    importToFavorites: document.getElementById("importToFavorites"),
     importPlaylistBtn: document.getElementById("importPlaylistBtn"),
     exportPlaylistBtn: document.getElementById("exportPlaylistBtn"),
     importPlaylistInput: document.getElementById("importPlaylistInput"),
@@ -51,14 +56,27 @@ const dom = {
     mobileSearchClose: document.getElementById("mobileSearchClose"),
     mobilePanelClose: document.getElementById("mobilePanelClose"),
     mobileClearPlaylistBtn: document.getElementById("mobileClearPlaylistBtn"),
+    mobilePlaylistActions: document.getElementById("mobilePlaylistActions"),
+    mobileFavoritesActions: document.getElementById("mobileFavoritesActions"),
+    mobileAddAllFavoritesBtn: document.getElementById("mobileAddAllFavoritesBtn"),
+    mobileImportFavoritesBtn: document.getElementById("mobileImportFavoritesBtn"),
+    mobileExportFavoritesBtn: document.getElementById("mobileExportFavoritesBtn"),
+    mobileClearFavoritesBtn: document.getElementById("mobileClearFavoritesBtn"),
     mobileOverlayScrim: document.getElementById("mobileOverlayScrim"),
     mobileExploreButton: document.getElementById("mobileExploreButton"),
     mobileQualityToggle: document.getElementById("mobileQualityToggle"),
     mobileQualityLabel: document.getElementById("mobileQualityLabel"),
     mobilePanel: document.getElementById("mobilePanel"),
-    mobilePanelTitle: document.getElementById("mobilePanelTitle"),
     mobileQueueToggle: document.getElementById("mobileQueueToggle"),
+    shuffleToggleBtn: document.getElementById("shuffleToggleBtn"),
     searchArea: document.getElementById("searchArea"),
+    libraryTabs: Array.from(document.querySelectorAll(".playlist-tab[data-target]")),
+    addAllFavoritesBtn: document.getElementById("addAllFavoritesBtn"),
+    importFavoritesBtn: document.getElementById("importFavoritesBtn"),
+    exportFavoritesBtn: document.getElementById("exportFavoritesBtn"),
+    importFavoritesInput: document.getElementById("importFavoritesInput"),
+    clearFavoritesBtn: document.getElementById("clearFavoritesBtn"),
+    currentFavoriteToggle: document.getElementById("currentFavoriteToggle"),
 };
 
 window.SolaraDom = dom;
@@ -135,9 +153,39 @@ function updateMobileClearPlaylistVisibility() {
     const isPlaylistView = !body || !currentView || currentView === "playlist";
     const playlistSongs = (typeof state !== "undefined" && Array.isArray(state.playlistSongs)) ? state.playlistSongs : [];
     const isEmpty = playlistSongs.length === 0 || !playlistElement || playlistElement.classList.contains("empty");
-    const shouldShow = isPlaylistView && !isEmpty;
+    const isPlaylistVisible = Boolean(playlistElement && !playlistElement.hasAttribute("hidden"));
+    const shouldShow = isPlaylistView && isPlaylistVisible && !isEmpty;
     button.hidden = !shouldShow;
     button.setAttribute("aria-hidden", shouldShow ? "false" : "true");
+}
+
+function updateMobileLibraryActionVisibility(showFavorites) {
+    if (!isMobileView) {
+        return;
+    }
+    const playlistGroup = dom.mobilePlaylistActions;
+    const favoritesGroup = dom.mobileFavoritesActions;
+    const showFavoritesGroup = Boolean(showFavorites);
+
+    if (playlistGroup) {
+        if (showFavoritesGroup) {
+            playlistGroup.setAttribute("hidden", "");
+            playlistGroup.setAttribute("aria-hidden", "true");
+        } else {
+            playlistGroup.removeAttribute("hidden");
+            playlistGroup.setAttribute("aria-hidden", "false");
+        }
+    }
+
+    if (favoritesGroup) {
+        if (showFavoritesGroup) {
+            favoritesGroup.removeAttribute("hidden");
+            favoritesGroup.setAttribute("aria-hidden", "false");
+        } else {
+            favoritesGroup.setAttribute("hidden", "");
+            favoritesGroup.setAttribute("aria-hidden", "true");
+        }
+    }
 }
 
 function forceCloseMobileSearchOverlay() {
@@ -301,6 +349,140 @@ const themeDefaults = {
 };
 let paletteRequestId = 0;
 
+const REMOTE_STORAGE_ENDPOINT = "/api/storage";
+let remoteSyncEnabled = false;
+const STORAGE_KEYS_TO_SYNC = new Set([
+    "playlistSongs",
+    "currentTrackIndex",
+    "playMode",
+    "playbackQuality",
+    "playerVolume",
+    "currentPlaylist",
+    "currentList",
+    "currentSong",
+    "currentPlaybackTime",
+    "favoriteSongs",
+    "currentFavoriteIndex",
+    "favoritePlayMode",
+    "favoritePlaybackTime",
+    "searchSource",
+    "lastSearchState.v1",
+]);
+
+function createPersistentStorageClient() {
+    let availabilityPromise = null;
+    let remoteAvailable = false;
+
+    const checkAvailability = async () => {
+        if (availabilityPromise) {
+            return availabilityPromise;
+        }
+        availabilityPromise = (async () => {
+            try {
+                const url = new URL(REMOTE_STORAGE_ENDPOINT, window.location.origin);
+                url.searchParams.set("status", "1");
+                const response = await fetch(url.toString(), { method: "GET" });
+                if (!response.ok) {
+                    return false;
+                }
+                const result = await response.json().catch(() => ({}));
+                remoteAvailable = Boolean(result && result.d1Available);
+                return remoteAvailable;
+            } catch (error) {
+                console.warn("检查远程存储可用性失败", error);
+                return false;
+            }
+        })();
+        return availabilityPromise;
+    };
+
+    const getItems = async (keys = []) => {
+        const available = await checkAvailability();
+        if (!available || !Array.isArray(keys) || keys.length === 0) {
+            return null;
+        }
+        try {
+            const url = new URL(REMOTE_STORAGE_ENDPOINT, window.location.origin);
+            url.searchParams.set("keys", keys.join(","));
+            const response = await fetch(url.toString(), { method: "GET" });
+            if (!response.ok) {
+                return null;
+            }
+            return await response.json();
+        } catch (error) {
+            console.warn("获取远程存储数据失败", error);
+            return null;
+        }
+    };
+
+    const setItems = async (items) => {
+        const available = await checkAvailability();
+        if (!available || !items || typeof items !== "object") {
+            return false;
+        }
+        try {
+            await fetch(REMOTE_STORAGE_ENDPOINT, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ data: items }),
+            });
+            return true;
+        } catch (error) {
+            console.warn("写入远程存储失败", error);
+            return false;
+        }
+    };
+
+    const removeItems = async (keys = []) => {
+        const available = await checkAvailability();
+        if (!available || !Array.isArray(keys) || keys.length === 0) {
+            return false;
+        }
+        try {
+            await fetch(REMOTE_STORAGE_ENDPOINT, {
+                method: "DELETE",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ keys }),
+            });
+            return true;
+        } catch (error) {
+            console.warn("删除远程存储数据失败", error);
+            return false;
+        }
+    };
+
+    return {
+        checkAvailability,
+        getItems,
+        setItems,
+        removeItems,
+    };
+}
+
+const persistentStorage = createPersistentStorageClient();
+
+function shouldSyncStorageKey(key) {
+    return STORAGE_KEYS_TO_SYNC.has(key);
+}
+
+function persistStorageItems(items) {
+    if (!items || typeof items !== "object") {
+        return;
+    }
+    persistentStorage.setItems(items).catch((error) => {
+        console.warn("同步远程存储失败", error);
+    });
+}
+
+function removePersistentItems(keys = []) {
+    if (!Array.isArray(keys) || keys.length === 0) {
+        return;
+    }
+    persistentStorage.removeItems(keys).catch((error) => {
+        console.warn("移除远程存储数据失败", error);
+    });
+}
+
 function safeGetLocalStorage(key) {
     try {
         return localStorage.getItem(key);
@@ -310,11 +492,27 @@ function safeGetLocalStorage(key) {
     }
 }
 
-function safeSetLocalStorage(key, value) {
+function safeSetLocalStorage(key, value, options = {}) {
+    const { skipRemote = false } = options;
     try {
         localStorage.setItem(key, value);
     } catch (error) {
         console.warn(`写入本地存储失败: ${key}`, error);
+    }
+    if (!skipRemote && remoteSyncEnabled && shouldSyncStorageKey(key)) {
+        persistStorageItems({ [key]: value });
+    }
+}
+
+function safeRemoveLocalStorage(key, options = {}) {
+    const { skipRemote = false } = options;
+    try {
+        localStorage.removeItem(key);
+    } catch (error) {
+        console.warn(`移除本地存储失败: ${key}`, error);
+    }
+    if (!skipRemote && remoteSyncEnabled && shouldSyncStorageKey(key)) {
+        removePersistentItems([key]);
     }
 }
 
@@ -327,6 +525,38 @@ function parseJSON(value, fallback) {
         console.warn("解析本地存储 JSON 失败", error);
         return fallback;
     }
+}
+
+function cloneSearchResults(results) {
+    if (!Array.isArray(results)) {
+        return [];
+    }
+    try {
+        return JSON.parse(JSON.stringify(results));
+    } catch (error) {
+        console.warn("复制搜索结果失败，回退到浅拷贝", error);
+        return results.map((item) => {
+            if (item && typeof item === "object") {
+                return { ...item };
+            }
+            return item;
+        });
+    }
+}
+
+function sanitizeStoredSearchState(data, defaultSource = SOURCE_OPTIONS[0].value) {
+    if (!data || typeof data !== "object") {
+        return null;
+    }
+
+    const keyword = typeof data.keyword === "string" ? data.keyword : "";
+    const sourceValue = typeof data.source === "string" ? data.source : defaultSource;
+    const source = normalizeSource(sourceValue);
+    const page = Number.isInteger(data.page) && data.page > 0 ? data.page : 1;
+    const hasMore = typeof data.hasMore === "boolean" ? data.hasMore : true;
+    const results = cloneSearchResults(data.results);
+
+    return { keyword, source, page, hasMore, results };
 }
 
 function loadStoredPalettes() {
@@ -441,6 +671,38 @@ const savedPlaylistSongs = (() => {
 
 const PLAYLIST_EXPORT_VERSION = 1;
 
+const savedFavoriteSongs = (() => {
+    const stored = safeGetLocalStorage("favoriteSongs");
+    const favorites = parseJSON(stored, []);
+    return Array.isArray(favorites) ? favorites : [];
+})();
+
+const FAVORITE_EXPORT_VERSION = 1;
+
+const savedCurrentFavoriteIndex = (() => {
+    const stored = safeGetLocalStorage("currentFavoriteIndex");
+    const index = Number.parseInt(stored, 10);
+    return Number.isInteger(index) && index >= 0 ? index : 0;
+})();
+
+const savedFavoritePlayMode = (() => {
+    const stored = safeGetLocalStorage("favoritePlayMode");
+    const normalized = stored === "order" ? "list" : stored;
+    const modes = ["list", "single", "random"];
+    return modes.includes(normalized) ? normalized : "list";
+})();
+
+const savedFavoritePlaybackTime = (() => {
+    const stored = safeGetLocalStorage("favoritePlaybackTime");
+    const time = Number.parseFloat(stored);
+    return Number.isFinite(time) && time >= 0 ? time : 0;
+})();
+
+const savedCurrentList = (() => {
+    const stored = safeGetLocalStorage("currentList");
+    return stored === "favorite" ? "favorite" : "playlist";
+})();
+
 const savedCurrentTrackIndex = (() => {
     const stored = safeGetLocalStorage("currentTrackIndex");
     const index = Number.parseInt(stored, 10);
@@ -469,6 +731,18 @@ const savedSearchSource = (() => {
     return normalizeSource(stored);
 })();
 
+const LAST_SEARCH_STATE_STORAGE_KEY = "lastSearchState.v1";
+
+const savedLastSearchState = (() => {
+    const stored = safeGetLocalStorage(LAST_SEARCH_STATE_STORAGE_KEY);
+    const parsed = parseJSON(stored, null);
+    return sanitizeStoredSearchState(parsed, savedSearchSource || SOURCE_OPTIONS[0].value);
+})();
+
+let lastSearchStateCache = savedLastSearchState
+    ? { ...savedLastSearchState, results: cloneSearchResults(savedLastSearchState.results) }
+    : null;
+
 const savedPlaybackTime = (() => {
     const stored = safeGetLocalStorage("currentPlaybackTime");
     const time = Number.parseFloat(stored);
@@ -482,7 +756,7 @@ const savedCurrentSong = (() => {
 
 const savedCurrentPlaylist = (() => {
     const stored = safeGetLocalStorage("currentPlaylist");
-    const playlists = ["playlist", "online", "search"];
+    const playlists = ["playlist", "online", "search", "favorites"];
     return playlists.includes(stored) ? stored : "playlist";
 })();
 
@@ -619,27 +893,35 @@ Object.freeze(API);
 
 const state = {
     onlineSongs: [],
-    searchResults: [],
+    searchResults: cloneSearchResults(savedLastSearchState?.results) || [],
     renderedSearchCount: 0,
     currentTrackIndex: savedCurrentTrackIndex,
     currentAudioUrl: null,
     lyricsData: [],
     currentLyricLine: -1,
     currentPlaylist: savedCurrentPlaylist, // 'online', 'search', or 'playlist'
-    searchPage: 1,
-    searchKeyword: "", // 确保这里有初始值
-    searchSource: savedSearchSource,
-    hasMoreResults: true,
+    searchPage: savedLastSearchState?.page || 1,
+    searchKeyword: savedLastSearchState?.keyword || "", // 确保这里有初始值
+    searchSource: savedLastSearchState ? savedLastSearchState.source : savedSearchSource,
+    hasMoreResults: typeof savedLastSearchState?.hasMore === "boolean" ? savedLastSearchState.hasMore : true,
     currentSong: savedCurrentSong,
     currentArtworkUrl: null,
     debugMode: false,
     isSearchMode: false, // 新增：搜索模式状态
     playlistSongs: savedPlaylistSongs, // 新增：统一播放列表
     playMode: savedPlayMode, // 新增：播放模式 'list', 'single', 'random'
+    playlistLastNonRandomMode: savedPlayMode === "random" ? "list" : savedPlayMode,
+    favoriteSongs: savedFavoriteSongs,
+    currentFavoriteIndex: savedCurrentFavoriteIndex,
+    currentList: savedCurrentList,
+    favoritePlayMode: savedFavoritePlayMode,
+    favoriteLastNonRandomMode: savedFavoritePlayMode === "random" ? "list" : savedFavoritePlayMode,
+    favoritePlaybackTime: savedFavoritePlaybackTime,
     playbackQuality: savedPlaybackQuality,
     volume: savedVolume,
     currentPlaybackTime: savedPlaybackTime,
     lastSavedPlaybackTime: savedPlaybackTime,
+    favoriteLastSavedPlaybackTime: savedFavoritePlaybackTime,
     pendingSeekTime: null,
     isSeeking: false,
     qualityMenuOpen: false,
@@ -659,6 +941,208 @@ const state = {
     selectedSearchResults: new Set(),
 };
 
+let importSelectedMenuOutsideHandler = null;
+
+if (state.currentList === "favorite" && (!Array.isArray(state.favoriteSongs) || state.favoriteSongs.length === 0)) {
+    state.currentList = "playlist";
+}
+if (state.currentList === "favorite") {
+    state.currentPlaylist = "favorites";
+}
+state.favoriteSongs = ensureFavoriteSongsArray()
+    .map((song) => sanitizeImportedSong(song) || song)
+    .filter((song) => song && typeof song === "object");
+if (!Array.isArray(state.favoriteSongs) || state.favoriteSongs.length === 0) {
+    state.currentFavoriteIndex = 0;
+} else if (state.currentFavoriteIndex >= state.favoriteSongs.length) {
+    state.currentFavoriteIndex = state.favoriteSongs.length - 1;
+}
+saveFavoriteState();
+
+async function bootstrapPersistentStorage() {
+    try {
+        const remoteKeys = Array.from(STORAGE_KEYS_TO_SYNC);
+        const snapshot = await persistentStorage.getItems(remoteKeys);
+        if (!snapshot || !snapshot.d1Available || !snapshot.data) {
+            return;
+        }
+        applyPersistentSnapshotFromRemote(snapshot.data);
+    } catch (error) {
+        console.warn("加载远程存储失败", error);
+    } finally {
+        remoteSyncEnabled = true;
+    }
+}
+
+function applyPersistentSnapshotFromRemote(data) {
+    if (!data || typeof data !== "object") {
+        return;
+    }
+
+    let playlistUpdated = false;
+
+    if (typeof data.playlistSongs === "string") {
+        const playlist = parseJSON(data.playlistSongs, []);
+        if (Array.isArray(playlist)) {
+            state.playlistSongs = playlist;
+            safeSetLocalStorage("playlistSongs", data.playlistSongs, { skipRemote: true });
+            playlistUpdated = true;
+        }
+    }
+
+    if (typeof data.currentTrackIndex === "string") {
+        const index = Number.parseInt(data.currentTrackIndex, 10);
+        if (Number.isInteger(index)) {
+            state.currentTrackIndex = index;
+            safeSetLocalStorage("currentTrackIndex", data.currentTrackIndex, { skipRemote: true });
+        }
+    }
+
+    if (typeof data.playMode === "string") {
+        state.playMode = ["list", "single", "random"].includes(data.playMode) ? data.playMode : state.playMode;
+        safeSetLocalStorage("playMode", state.playMode, { skipRemote: true });
+    }
+
+    if (typeof data.playbackQuality === "string") {
+        state.playbackQuality = normalizeQuality(data.playbackQuality);
+        safeSetLocalStorage("playbackQuality", state.playbackQuality, { skipRemote: true });
+    }
+
+    if (typeof data.playerVolume === "string") {
+        const volume = Number.parseFloat(data.playerVolume);
+        if (Number.isFinite(volume)) {
+            const clamped = Math.min(Math.max(volume, 0), 1);
+            state.volume = clamped;
+            safeSetLocalStorage("playerVolume", String(clamped), { skipRemote: true });
+        }
+    }
+
+    if (typeof data.currentPlaylist === "string") {
+        state.currentPlaylist = data.currentPlaylist;
+        safeSetLocalStorage("currentPlaylist", data.currentPlaylist, { skipRemote: true });
+    }
+
+    if (typeof data.currentList === "string") {
+        state.currentList = data.currentList === "favorite" ? "favorite" : "playlist";
+        safeSetLocalStorage("currentList", state.currentList, { skipRemote: true });
+    }
+
+    if (typeof data.currentSong === "string" && data.currentSong) {
+        const currentSong = parseJSON(data.currentSong, null);
+        if (currentSong) {
+            state.currentSong = currentSong;
+            safeSetLocalStorage("currentSong", data.currentSong, { skipRemote: true });
+        }
+    }
+
+    if (typeof data.currentPlaybackTime === "string") {
+        const playbackTime = Number.parseFloat(data.currentPlaybackTime);
+        if (Number.isFinite(playbackTime) && playbackTime >= 0) {
+            state.currentPlaybackTime = playbackTime;
+            safeSetLocalStorage("currentPlaybackTime", data.currentPlaybackTime, { skipRemote: true });
+        }
+    }
+
+    if (typeof data.favoriteSongs === "string") {
+        const favorites = parseJSON(data.favoriteSongs, []);
+        if (Array.isArray(favorites)) {
+            state.favoriteSongs = favorites;
+            safeSetLocalStorage("favoriteSongs", data.favoriteSongs, { skipRemote: true });
+        }
+    }
+
+    if (typeof data.currentFavoriteIndex === "string") {
+        const favoriteIndex = Number.parseInt(data.currentFavoriteIndex, 10);
+        if (Number.isInteger(favoriteIndex)) {
+            state.currentFavoriteIndex = favoriteIndex;
+            safeSetLocalStorage("currentFavoriteIndex", data.currentFavoriteIndex, { skipRemote: true });
+        }
+    }
+
+    if (state.currentList === "favorite" && (!Array.isArray(state.favoriteSongs) || state.favoriteSongs.length === 0)) {
+        state.currentList = "playlist";
+    }
+
+    if (typeof data.favoritePlayMode === "string") {
+        state.favoritePlayMode = ["list", "single", "random"].includes(data.favoritePlayMode)
+            ? data.favoritePlayMode
+            : state.favoritePlayMode;
+        safeSetLocalStorage("favoritePlayMode", state.favoritePlayMode, { skipRemote: true });
+    }
+
+    if (typeof data.favoritePlaybackTime === "string") {
+        const favoritePlaybackTime = Number.parseFloat(data.favoritePlaybackTime);
+        if (Number.isFinite(favoritePlaybackTime) && favoritePlaybackTime >= 0) {
+            state.favoritePlaybackTime = favoritePlaybackTime;
+            safeSetLocalStorage("favoritePlaybackTime", data.favoritePlaybackTime, { skipRemote: true });
+        }
+    }
+
+    if (typeof data.searchSource === "string") {
+        state.searchSource = normalizeSource(data.searchSource);
+        safeSetLocalStorage("searchSource", state.searchSource, { skipRemote: true });
+        updateSourceLabel();
+        buildSourceMenu();
+    }
+
+    if (typeof data[LAST_SEARCH_STATE_STORAGE_KEY] === "string") {
+        const restoredSearch = parseJSON(data[LAST_SEARCH_STATE_STORAGE_KEY], null);
+        const restored = restoreStateFromSnapshot(restoredSearch);
+        if (restored) {
+            safeSetLocalStorage(LAST_SEARCH_STATE_STORAGE_KEY, data[LAST_SEARCH_STATE_STORAGE_KEY], { skipRemote: true });
+            restoreSearchResultsList();
+        }
+    }
+
+    dom.audioPlayer.volume = state.volume;
+    dom.volumeSlider.value = state.volume;
+    updateVolumeSliderBackground(state.volume);
+    updateVolumeIcon(state.volume);
+
+    renderFavorites();
+    switchLibraryTab(state.currentList === "favorite" ? "favorites" : "playlist");
+    updatePlayModeUI();
+    updateQualityLabel();
+    updatePlayPauseButton();
+
+    if (state.favoriteSongs.length === 0) {
+        state.currentFavoriteIndex = 0;
+    } else if (state.currentFavoriteIndex >= state.favoriteSongs.length) {
+        state.currentFavoriteIndex = state.favoriteSongs.length - 1;
+    }
+
+    if (playlistUpdated) {
+        let restoredIndex = state.currentTrackIndex;
+        if (!Number.isInteger(restoredIndex) || restoredIndex < 0 || restoredIndex >= state.playlistSongs.length) {
+            restoredIndex = 0;
+            state.currentTrackIndex = restoredIndex;
+        }
+        state.currentPlaylist = "playlist";
+        renderPlaylist();
+
+        const restoredSong = state.playlistSongs[restoredIndex];
+        if (restoredSong) {
+            state.currentSong = restoredSong;
+            updatePlaylistHighlight();
+            updateCurrentSongInfo(restoredSong).catch((error) => {
+                console.error("恢复远程歌曲信息失败:", error);
+            });
+        }
+    } else if (dom.playlist) {
+        dom.playlist.classList.add("empty");
+        if (dom.playlistItems) {
+            dom.playlistItems.innerHTML = "";
+        }
+    }
+
+    savePlayerState({ skipRemote: true });
+    saveFavoriteState({ skipRemote: true });
+    updatePlaylistActionStates();
+    updateMobileClearPlaylistVisibility();
+}
+
+bootstrapPersistentStorage();
+
 // ==== Media Session integration (Safari/iOS Lock Screen) ====
 (() => {
     const audio = dom.audioPlayer;
@@ -667,6 +1151,18 @@ const state = {
     let handlersBound = false;
     let lastPositionUpdateTime = 0;
     const MEDIA_SESSION_ENDED_FLAG = '__solaraMediaSessionHandledEnded';
+
+    const preferLockScreenTrackControls = (() => {
+        if (typeof navigator === 'undefined') {
+            return false;
+        }
+        const ua = navigator.userAgent || '';
+        const platform = navigator.platform || '';
+        const isIOS = /iP(ad|hone|od)/.test(ua);
+        const isTouchMac = !isIOS && platform === 'MacIntel' && typeof navigator.maxTouchPoints === 'number' && navigator.maxTouchPoints > 1;
+        return isIOS || isTouchMac;
+    })();
+    const allowLockScreenScrubbing = typeof navigator.mediaSession.setPositionState === 'function' && !preferLockScreenTrackControls;
 
     function triggerMediaSessionMetadataRefresh() {
         let refreshed = false;
@@ -752,7 +1248,7 @@ const state = {
 
     function updatePositionState() {
         // iOS 15+ 支持 setPositionState；用于让锁屏进度条可拖动与显示
-        if (typeof navigator.mediaSession.setPositionState !== 'function') return;
+        if (!allowLockScreenScrubbing) return;
         const duration = Number.isFinite(audio.duration) ? audio.duration : 0;
         const position = Number.isFinite(audio.currentTime) ? audio.currentTime : 0;
         const playbackRate = Number.isFinite(audio.playbackRate) ? audio.playbackRate : 1;
@@ -808,15 +1304,21 @@ const state = {
             navigator.mediaSession.setActionHandler('seekbackward', null);
             navigator.mediaSession.setActionHandler('seekforward', null);
 
-            // 关键：让锁屏支持拖动进度到任意位置
-            navigator.mediaSession.setActionHandler('seekto', (e) => {
-                if (!e || typeof e.seekTime !== 'number') return;
-                audio.currentTime = Math.max(0, Math.min(audio.duration || 0, e.seekTime));
-                if (e.fastSeek && typeof audio.fastSeek === 'function') {
-                    audio.fastSeek(audio.currentTime);
-                }
-                updatePositionState();
-            });
+            if (allowLockScreenScrubbing) {
+                // 关键：让锁屏支持拖动进度到任意位置
+                navigator.mediaSession.setActionHandler('seekto', (e) => {
+                    if (!e || typeof e.seekTime !== 'number') return;
+                    audio.currentTime = Math.max(0, Math.min(audio.duration || 0, e.seekTime));
+                    if (e.fastSeek && typeof audio.fastSeek === 'function') {
+                        audio.fastSeek(audio.currentTime);
+                    }
+                    updatePositionState();
+                });
+            } else {
+                try {
+                    navigator.mediaSession.setActionHandler('seekto', null);
+                } catch (_) {}
+            }
 
             // 可选：切换播放状态（大部分系统自己会处理）
             navigator.mediaSession.setActionHandler('play', async () => {
@@ -1365,6 +1867,8 @@ async function updateDynamicBackground(imageUrl) {
         return;
     }
 
+    debugLog(`动态背景: 更新至新的图片 ${imageUrl}`);
+
     if (paletteAbortController) {
         paletteAbortController.abort();
         paletteAbortController = null;
@@ -1402,6 +1906,7 @@ async function updateDynamicBackground(imageUrl) {
             return;
         }
         console.warn("获取动态背景失败:", error);
+        debugLog(`动态背景加载失败: ${error}`);
         if (requestId === paletteRequestId) {
             resetDynamicBackground();
         }
@@ -1412,19 +1917,29 @@ async function updateDynamicBackground(imageUrl) {
     }
 }
 
-function savePlayerState() {
-    safeSetLocalStorage("playlistSongs", JSON.stringify(state.playlistSongs));
-    safeSetLocalStorage("currentTrackIndex", String(state.currentTrackIndex));
-    safeSetLocalStorage("playMode", state.playMode);
-    safeSetLocalStorage("playbackQuality", state.playbackQuality);
-    safeSetLocalStorage("playerVolume", String(state.volume));
-    safeSetLocalStorage("currentPlaylist", state.currentPlaylist);
+function savePlayerState(options = {}) {
+    const { skipRemote = false } = options;
+    safeSetLocalStorage("playlistSongs", JSON.stringify(state.playlistSongs), { skipRemote });
+    safeSetLocalStorage("currentTrackIndex", String(state.currentTrackIndex), { skipRemote });
+    safeSetLocalStorage("playMode", state.playMode, { skipRemote });
+    safeSetLocalStorage("playbackQuality", state.playbackQuality, { skipRemote });
+    safeSetLocalStorage("playerVolume", String(state.volume), { skipRemote });
+    safeSetLocalStorage("currentPlaylist", state.currentPlaylist, { skipRemote });
+    safeSetLocalStorage("currentList", state.currentList, { skipRemote });
     if (state.currentSong) {
-        safeSetLocalStorage("currentSong", JSON.stringify(state.currentSong));
+        safeSetLocalStorage("currentSong", JSON.stringify(state.currentSong), { skipRemote });
     } else {
-        safeSetLocalStorage("currentSong", "");
+        safeSetLocalStorage("currentSong", "", { skipRemote });
     }
-    safeSetLocalStorage("currentPlaybackTime", String(state.currentPlaybackTime || 0));
+    safeSetLocalStorage("currentPlaybackTime", String(state.currentPlaybackTime || 0), { skipRemote });
+}
+
+function saveFavoriteState(options = {}) {
+    const { skipRemote = false } = options;
+    safeSetLocalStorage("favoriteSongs", JSON.stringify(state.favoriteSongs), { skipRemote });
+    safeSetLocalStorage("currentFavoriteIndex", String(state.currentFavoriteIndex), { skipRemote });
+    safeSetLocalStorage("favoritePlayMode", state.favoritePlayMode, { skipRemote });
+    safeSetLocalStorage("favoritePlaybackTime", String(state.favoritePlaybackTime || 0), { skipRemote });
 }
 
 // 调试日志函数
@@ -1432,7 +1947,14 @@ function debugLog(message) {
     console.log(`[DEBUG] ${message}`);
     if (state.debugMode) {
         const debugInfo = dom.debugInfo;
-        debugInfo.innerHTML += `<div>${new Date().toLocaleTimeString()}: ${message}</div>`;
+        const entry = document.createElement("div");
+        entry.textContent = `${new Date().toLocaleTimeString()}: ${message}`;
+        debugInfo.appendChild(entry);
+
+        while (debugInfo.childNodes.length > 50) {
+            debugInfo.removeChild(debugInfo.firstChild);
+        }
+
         debugInfo.classList.add("show");
         debugInfo.scrollTop = debugInfo.scrollHeight;
     }
@@ -1465,13 +1987,17 @@ function toggleSearchMode(enable) {
 }
 
 // 新增：显示搜索结果
-function showSearchResults() {
+function showSearchResults(options = {}) {
+    const { restore = false } = options;
     toggleSearchMode(true);
     if (state.sourceMenuOpen) {
         scheduleSourceMenuPositionUpdate();
     }
     if (state.qualityMenuOpen) {
         schedulePlayerQualityMenuPositionUpdate();
+    }
+    if (restore) {
+        restoreSearchResultsList();
     }
 }
 
@@ -1491,6 +2017,95 @@ function hideSearchResults() {
     }
     state.renderedSearchCount = 0;
     resetSelectedSearchResults();
+    closeImportSelectedMenu();
+}
+
+function createSearchStateSnapshot() {
+    return {
+        keyword: typeof state.searchKeyword === "string" ? state.searchKeyword : "",
+        source: normalizeSource(state.searchSource),
+        page: Number.isInteger(state.searchPage) && state.searchPage > 0 ? state.searchPage : 1,
+        hasMore: Boolean(state.hasMoreResults),
+        results: cloneSearchResults(state.searchResults),
+    };
+}
+
+function persistLastSearchState() {
+    const snapshot = createSearchStateSnapshot();
+    if (!snapshot.keyword) {
+        lastSearchStateCache = null;
+        safeRemoveLocalStorage(LAST_SEARCH_STATE_STORAGE_KEY);
+        return;
+    }
+    lastSearchStateCache = { ...snapshot, results: cloneSearchResults(snapshot.results) };
+    safeSetLocalStorage(LAST_SEARCH_STATE_STORAGE_KEY, JSON.stringify(snapshot));
+}
+
+function restoreStateFromSnapshot(snapshot) {
+    const sanitized = sanitizeStoredSearchState(snapshot, state.searchSource || SOURCE_OPTIONS[0].value);
+    if (!sanitized || !sanitized.keyword) {
+        return false;
+    }
+    state.searchKeyword = sanitized.keyword;
+    state.searchSource = sanitized.source;
+    state.searchPage = sanitized.page;
+    state.hasMoreResults = sanitized.hasMore;
+    state.searchResults = cloneSearchResults(sanitized.results);
+    lastSearchStateCache = { ...sanitized, results: cloneSearchResults(sanitized.results) };
+    safeSetLocalStorage("searchSource", state.searchSource);
+    updateSourceLabel();
+    buildSourceMenu();
+    return true;
+}
+
+function restoreSearchResultsList() {
+    const container = dom.searchResultsList || dom.searchResults;
+    if (!container) {
+        return;
+    }
+    if (container.childElementCount > 0) {
+        return;
+    }
+    const results = Array.isArray(state.searchResults) ? state.searchResults : [];
+    state.renderedSearchCount = 0;
+    displaySearchResults(results, {
+        reset: true,
+        totalCount: results.length,
+    });
+}
+
+function handleSearchInputFocus() {
+    if (!dom.searchInput) {
+        return;
+    }
+
+    const currentValue = dom.searchInput.value.trim();
+    if (currentValue && state.searchKeyword && currentValue !== state.searchKeyword) {
+        return;
+    }
+
+    const hasKeyword = typeof state.searchKeyword === "string" && state.searchKeyword.length > 0;
+    const hasResults = Array.isArray(state.searchResults) && state.searchResults.length > 0;
+
+    if (!hasKeyword || !hasResults) {
+        const restored = restoreStateFromSnapshot(lastSearchStateCache);
+        if (!restored) {
+            return;
+        }
+    }
+
+    if (!dom.searchInput.value.trim()) {
+        dom.searchInput.value = state.searchKeyword;
+        window.requestAnimationFrame(() => {
+            try {
+                dom.searchInput.select();
+            } catch (error) {
+                console.warn("选择搜索文本失败", error);
+            }
+        });
+    }
+
+    showSearchResults({ restore: true });
 }
 
 const playModeTexts = {
@@ -1505,25 +2120,118 @@ const playModeIcons = {
     "random": "fa-shuffle"
 };
 
+function getActivePlayMode() {
+    return state.currentList === "favorite" ? state.favoritePlayMode : state.playMode;
+}
+
+function getLastNonRandomMode() {
+    if (state.currentList === "favorite") {
+        return state.favoriteLastNonRandomMode || "list";
+    }
+    return state.playlistLastNonRandomMode || "list";
+}
+
+function rememberLastNonRandomMode() {
+    const currentMode = getActivePlayMode();
+    if (currentMode === "random") {
+        return;
+    }
+    const mode = currentMode || "list";
+    if (state.currentList === "favorite") {
+        state.favoriteLastNonRandomMode = mode;
+    } else {
+        state.playlistLastNonRandomMode = mode;
+    }
+}
+
+function updateShuffleButtonUI() {
+    const button = dom.shuffleToggleBtn;
+    if (!button) {
+        return;
+    }
+    const mode = getActivePlayMode();
+    const isRandom = mode === "random";
+    button.setAttribute("aria-pressed", isRandom ? "true" : "false");
+    const iconClass = isRandom ? "shuffle-icon shuffle-icon--on" : "shuffle-icon shuffle-icon--off";
+    button.innerHTML = `<i class="fas fa-shuffle ${iconClass}"></i>`;
+    const label = isRandom ? "关闭随机播放" : "开启随机播放";
+    button.title = label;
+    button.setAttribute("aria-label", label);
+}
+
 function updatePlayModeUI() {
-    const mode = state.playMode;
-    dom.playModeBtn.innerHTML = `<i class="fas ${playModeIcons[mode] || playModeIcons.list}"></i>`;
-    dom.playModeBtn.title = `播放模式: ${playModeTexts[mode] || playModeTexts.list}`;
+    const mode = getActivePlayMode();
+    if (dom.playModeBtn) {
+        dom.playModeBtn.innerHTML = `<i class="fas ${playModeIcons[mode] || playModeIcons.list}"></i>`;
+        dom.playModeBtn.title = `播放模式: ${playModeTexts[mode] || playModeTexts.list}`;
+    }
+    updateShuffleButtonUI();
+}
+
+function setPlayMode(mode, { announce = true } = {}) {
+    const validModes = ["list", "single", "random"];
+    if (!validModes.includes(mode)) {
+        return getActivePlayMode();
+    }
+    const isFavoriteList = state.currentList === "favorite";
+    const key = isFavoriteList ? "favoritePlayMode" : "playMode";
+    const previousMode = state[key];
+    if (previousMode === mode) {
+        updatePlayModeUI();
+        return mode;
+    }
+
+    state[key] = mode;
+    if (mode !== "random") {
+        if (isFavoriteList) {
+            state.favoriteLastNonRandomMode = mode;
+        } else {
+            state.playlistLastNonRandomMode = mode;
+        }
+    }
+
+    if (isFavoriteList) {
+        saveFavoriteState();
+    } else {
+        savePlayerState();
+    }
+
+    updatePlayModeUI();
+
+    if (announce) {
+        const modeText = playModeTexts[mode] || playModeTexts.list;
+        showNotification(`播放模式: ${modeText}`);
+        debugLog(`播放模式切换为: ${mode} (列表: ${state.currentList})`);
+    }
+
+    return mode;
 }
 
 // 新增：播放模式切换
 function togglePlayMode() {
-    const modes = ["list", "single", "random"];
-    const currentIndex = modes.indexOf(state.playMode);
+    const modes = isMobileView ? ["list", "single", "random"] : ["list", "single"];
+    const currentMode = getActivePlayMode();
+    let currentIndex = modes.indexOf(currentMode);
+    if (currentIndex === -1) {
+        currentIndex = 0;
+    }
     const nextIndex = (currentIndex + 1) % modes.length;
-    state.playMode = modes[nextIndex];
+    const nextMode = modes[nextIndex];
+    if (nextMode === "random") {
+        rememberLastNonRandomMode();
+    }
+    setPlayMode(nextMode);
+}
 
-    updatePlayModeUI();
-    savePlayerState();
-
-    const modeText = playModeTexts[state.playMode] || playModeTexts.list;
-    showNotification(`播放模式: ${modeText}`);
-    debugLog(`播放模式切换为: ${state.playMode}`);
+function toggleShuffleMode() {
+    const currentMode = getActivePlayMode();
+    if (currentMode === "random") {
+        const fallback = getLastNonRandomMode();
+        setPlayMode(fallback);
+        return;
+    }
+    rememberLastNonRandomMode();
+    setPlayMode("random");
 }
 
 function formatTime(seconds) {
@@ -1599,10 +2307,18 @@ function handleTimeUpdate() {
 
     syncLyrics();
 
-    state.currentPlaybackTime = currentTime;
-    if (Math.abs(currentTime - state.lastSavedPlaybackTime) >= 2) {
-        state.lastSavedPlaybackTime = currentTime;
-        safeSetLocalStorage("currentPlaybackTime", currentTime.toFixed(1));
+    if (state.currentList === "favorite") {
+        state.favoritePlaybackTime = currentTime;
+        if (Math.abs(currentTime - state.favoriteLastSavedPlaybackTime) >= 2) {
+            state.favoriteLastSavedPlaybackTime = currentTime;
+            safeSetLocalStorage("favoritePlaybackTime", currentTime.toFixed(1));
+        }
+    } else {
+        state.currentPlaybackTime = currentTime;
+        if (Math.abs(currentTime - state.lastSavedPlaybackTime) >= 2) {
+            state.lastSavedPlaybackTime = currentTime;
+            safeSetLocalStorage("currentPlaybackTime", currentTime.toFixed(1));
+        }
     }
 }
 
@@ -1610,7 +2326,12 @@ function handleLoadedMetadata() {
     const duration = dom.audioPlayer.duration || 0;
     dom.progressBar.max = duration;
     dom.durationDisplay.textContent = formatTime(duration);
-    updateProgressBarBackground(dom.audioPlayer.currentTime || 0, duration);
+    const storedTime = state.currentList === "favorite"
+        ? state.favoritePlaybackTime
+        : state.currentPlaybackTime;
+    dom.progressBar.value = storedTime;
+    dom.currentTimeDisplay.textContent = formatTime(storedTime);
+    updateProgressBarBackground(storedTime, duration);
 
     if (state.pendingSeekTime != null) {
         setAudioCurrentTime(state.pendingSeekTime);
@@ -1630,7 +2351,11 @@ function setAudioCurrentTime(time) {
     dom.progressBar.value = clamped;
     dom.currentTimeDisplay.textContent = formatTime(clamped);
     updateProgressBarBackground(clamped, duration);
-    state.currentPlaybackTime = clamped;
+    if (state.currentList === "favorite") {
+        state.favoritePlaybackTime = clamped;
+    } else {
+        state.currentPlaybackTime = clamped;
+    }
 }
 
 function handleProgressInput() {
@@ -1649,8 +2374,13 @@ function handleProgressChange() {
 function seekAudio(value) {
     if (!Number.isFinite(value)) return;
     setAudioCurrentTime(value);
-    state.lastSavedPlaybackTime = state.currentPlaybackTime;
-    safeSetLocalStorage("currentPlaybackTime", state.currentPlaybackTime.toFixed(1));
+    if (state.currentList === "favorite") {
+        state.favoriteLastSavedPlaybackTime = state.favoritePlaybackTime;
+        safeSetLocalStorage("favoritePlaybackTime", state.favoritePlaybackTime.toFixed(1));
+    } else {
+        state.lastSavedPlaybackTime = state.currentPlaybackTime;
+        safeSetLocalStorage("currentPlaybackTime", state.currentPlaybackTime.toFixed(1));
+    }
 }
 
 async function togglePlayPause() {
@@ -2128,7 +2858,11 @@ async function restoreCurrentSongState() {
 }
 
 window.addEventListener("load", setupInteractions);
-dom.audioPlayer.addEventListener("ended", autoPlayNext);
+// 仅在浏览器不支持 Media Session API 时监听 ended 事件，
+// 避免与媒体会话的结束回调重复触发自动播放。
+if (!("mediaSession" in navigator)) {
+    dom.audioPlayer.addEventListener("ended", autoPlayNext);
+}
 
 function setupInteractions() {
     function ensureQualityMenuPortal() {
@@ -2166,6 +2900,13 @@ function setupInteractions() {
                 event.preventDefault();
                 event.stopPropagation();
                 removeFromPlaylist(index);
+            } else if (action === "favorite") {
+                event.preventDefault();
+                event.stopPropagation();
+                const song = state.playlistSongs[index];
+                if (song) {
+                    toggleFavorite(song);
+                }
             } else if (action === "download") {
                 event.preventDefault();
                 event.stopPropagation();
@@ -2190,6 +2931,10 @@ function setupInteractions() {
             }
 
             activatePlaylistItem(index);
+
+            if (event.detail !== 0 && typeof item.blur === "function") {
+                item.blur();
+            }
         };
 
         const handleKeydown = (event) => {
@@ -2213,6 +2958,100 @@ function setupInteractions() {
 
         dom.playlistItems.addEventListener("click", handleClick);
         dom.playlistItems.addEventListener("keydown", handleKeydown);
+    }
+
+    function initializeFavoritesEventHandlers() {
+        if (!dom.favoriteItems) {
+            return;
+        }
+
+        const activateFavoriteItem = (index) => {
+            if (typeof index !== "number" || Number.isNaN(index)) {
+                return;
+            }
+            playFavoriteSong(index);
+        };
+
+        const handleFavoriteAction = (event, actionButton) => {
+            const index = Number(actionButton.dataset.index);
+            if (Number.isNaN(index)) {
+                return;
+            }
+
+            const action = actionButton.dataset.favoriteAction;
+            if (action === "add") {
+                event.preventDefault();
+                event.stopPropagation();
+                const song = state.favoriteSongs[index];
+                if (!song) {
+                    return;
+                }
+                const added = addSongToPlaylist(song);
+                if (added) {
+                    renderPlaylist();
+                    showNotification("已添加到播放列表", "success");
+                } else {
+                    showNotification("播放列表已包含该歌曲", "warning");
+                }
+            } else if (action === "download") {
+                event.preventDefault();
+                event.stopPropagation();
+                showQualityMenu(event, index, "favorites");
+            } else if (action === "remove") {
+                event.preventDefault();
+                event.stopPropagation();
+                const removed = removeFavoriteAtIndex(index);
+                if (removed) {
+                    showNotification("已从收藏列表移除", "success");
+                }
+            }
+        };
+
+        const handleClick = (event) => {
+            const actionButton = event.target.closest("[data-favorite-action]");
+            if (actionButton) {
+                handleFavoriteAction(event, actionButton);
+                return;
+            }
+            const item = event.target.closest(".playlist-item");
+            if (!item || !dom.favoriteItems.contains(item)) {
+                return;
+            }
+
+            const index = Number(item.dataset.index);
+            if (Number.isNaN(index)) {
+                return;
+            }
+
+            event.preventDefault();
+            activateFavoriteItem(index);
+        };
+
+        const handleKeydown = (event) => {
+            const actionButton = event.target.closest("[data-favorite-action]");
+            if (actionButton) {
+                if (event.key === "Enter" || event.key === " ") {
+                    handleFavoriteAction(event, actionButton);
+                }
+                return;
+            }
+            if (event.key !== "Enter" && event.key !== " ") {
+                return;
+            }
+            const item = event.target.closest(".playlist-item");
+            if (!item || !dom.favoriteItems.contains(item)) {
+                return;
+            }
+            const index = Number(item.dataset.index);
+            if (Number.isNaN(index)) {
+                return;
+            }
+            event.preventDefault();
+            activateFavoriteItem(index);
+        };
+
+        dom.favoriteItems.addEventListener("click", handleClick);
+        dom.favoriteItems.addEventListener("keydown", handleKeydown);
     }
 
     function applyTheme(isDark) {
@@ -2249,10 +3088,18 @@ function setupInteractions() {
     buildQualityMenu();
     ensureQualityMenuPortal();
     initializePlaylistEventHandlers();
+    initializeFavoritesEventHandlers();
     updateQualityLabel();
     updatePlayPauseButton();
-    dom.currentTimeDisplay.textContent = formatTime(state.currentPlaybackTime);
-    updateProgressBarBackground(0, Number(dom.progressBar.max));
+    const initialTime = state.currentList === "favorite"
+        ? state.favoritePlaybackTime
+        : state.currentPlaybackTime;
+    dom.progressBar.value = initialTime;
+    dom.currentTimeDisplay.textContent = formatTime(initialTime);
+    updateProgressBarBackground(initialTime, Number(dom.progressBar.max));
+    renderFavorites();
+    switchLibraryTab(state.currentList === "favorite" ? "favorites" : "playlist");
+    updatePlayModeUI();
 
     dom.playPauseBtn.addEventListener("click", togglePlayPause);
     dom.audioPlayer.addEventListener("timeupdate", handleTimeUpdate);
@@ -2331,6 +3178,98 @@ function setupInteractions() {
         dom.mobileExportPlaylistBtn.addEventListener("click", exportPlaylist);
     }
 
+    if (dom.addAllFavoritesBtn) {
+        dom.addAllFavoritesBtn.addEventListener("click", addAllFavoritesToPlaylist);
+    }
+
+    if (dom.importFavoritesBtn && dom.importFavoritesInput) {
+        dom.importFavoritesBtn.addEventListener("click", () => {
+            dom.importFavoritesInput.value = "";
+            dom.importFavoritesInput.click();
+        });
+        dom.importFavoritesInput.addEventListener("change", handleImportFavoritesChange);
+    }
+
+    if (dom.exportFavoritesBtn) {
+        dom.exportFavoritesBtn.addEventListener("click", exportFavorites);
+    }
+
+    if (dom.clearFavoritesBtn) {
+        dom.clearFavoritesBtn.addEventListener("click", clearFavorites);
+    }
+
+    if (dom.mobileAddAllFavoritesBtn) {
+        dom.mobileAddAllFavoritesBtn.addEventListener("click", addAllFavoritesToPlaylist);
+    }
+
+    if (dom.mobileImportFavoritesBtn && dom.importFavoritesInput) {
+        dom.mobileImportFavoritesBtn.addEventListener("click", () => {
+            dom.importFavoritesInput.value = "";
+            dom.importFavoritesInput.click();
+        });
+    }
+
+    if (dom.mobileExportFavoritesBtn) {
+        dom.mobileExportFavoritesBtn.addEventListener("click", exportFavorites);
+    }
+
+    if (dom.mobileClearFavoritesBtn) {
+        dom.mobileClearFavoritesBtn.addEventListener("click", clearFavorites);
+    }
+
+    if (dom.currentFavoriteToggle) {
+        dom.currentFavoriteToggle.addEventListener("click", () => {
+            if (!state.currentSong) {
+                return;
+            }
+            toggleFavorite(state.currentSong);
+        });
+    }
+
+    if (Array.isArray(dom.libraryTabs) && dom.libraryTabs.length > 0) {
+        dom.libraryTabs.forEach((tab) => {
+            if (!(tab instanceof HTMLElement)) {
+                return;
+            }
+            tab.addEventListener("click", () => {
+                const target = tab.dataset.target === "favorites" ? "favorites" : "playlist";
+                switchLibraryTab(target);
+            });
+        });
+    }
+
+    if (dom.importSelectedBtn) {
+        dom.importSelectedBtn.addEventListener("click", (event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            if (dom.importSelectedBtn.disabled) {
+                return;
+            }
+            const isOpen = dom.importSelectedMenu && !dom.importSelectedMenu.hasAttribute("hidden");
+            if (isOpen) {
+                closeImportSelectedMenu();
+            } else {
+                openImportSelectedMenu();
+            }
+        });
+    }
+
+    if (dom.importToPlaylist) {
+        dom.importToPlaylist.addEventListener("click", (event) => {
+            event.preventDefault();
+            closeImportSelectedMenu();
+            importSelectedSearchResults("playlist");
+        });
+    }
+
+    if (dom.importToFavorites) {
+        dom.importToFavorites.addEventListener("click", (event) => {
+            event.preventDefault();
+            closeImportSelectedMenu();
+            importSelectedSearchResults("favorites");
+        });
+    }
+
     if (dom.showPlaylistBtn) {
         dom.showPlaylistBtn.addEventListener("click", () => {
             if (isMobileView) {
@@ -2352,7 +3291,12 @@ function setupInteractions() {
 
     // 播放模式按钮事件
     updatePlayModeUI();
-    dom.playModeBtn.addEventListener("click", togglePlayMode);
+    if (dom.playModeBtn) {
+        dom.playModeBtn.addEventListener("click", togglePlayMode);
+    }
+    if (dom.shuffleToggleBtn) {
+        dom.shuffleToggleBtn.addEventListener("click", toggleShuffleMode);
+    }
 
     // 搜索相关事件 - 修复搜索下拉框显示问题
     dom.searchBtn.addEventListener("click", (e) => {
@@ -2360,6 +3304,11 @@ function setupInteractions() {
         e.stopPropagation();
         debugLog("搜索按钮被点击");
         performSearch();
+    });
+
+    dom.searchInput.addEventListener("focus", () => {
+        debugLog("搜索输入框获得焦点，尝试恢复上次搜索结果");
+        handleSearchInputFocus();
     });
 
     dom.searchInput.addEventListener("keypress", (e) => {
@@ -2372,13 +3321,6 @@ function setupInteractions() {
     });
 
     updateImportSelectedButton();
-    if (dom.importSelectedBtn) {
-        dom.importSelectedBtn.addEventListener("click", (event) => {
-            event.preventDefault();
-            event.stopPropagation();
-            importSelectedSearchResults();
-        });
-    }
 
     // 修复：点击搜索区域外部时隐藏搜索结果
     document.addEventListener("click", (e) => {
@@ -2526,6 +3468,7 @@ function updateCurrentSongInfo(song, options = {}) {
     state.currentSong = song;
     dom.currentSongTitle.textContent = song.name;
     updateMobileToolbarTitle();
+    updateFavoriteIcons();
 
     // 修复艺人名称显示问题 - 使用正确的字段名
     const artistText = Array.isArray(song.artist) ? song.artist.join(', ') : (song.artist || '未知艺术家');
@@ -2658,6 +3601,7 @@ async function performSearch(isLiveSearch = false) {
             reset: state.searchPage === 1,
             totalCount: state.searchResults.length,
         });
+        persistLastSearchState();
         debugLog(`搜索完成: 总共显示 ${state.searchResults.length} 个结果`);
 
         // 如果没有结果，显示提示
@@ -2708,6 +3652,7 @@ async function loadMoreResults() {
             displaySearchResults(results, {
                 totalCount: state.searchResults.length,
             });
+            persistLastSearchState();
             debugLog(`加载完成: 新增 ${results.length} 个结果`);
         } else {
             state.hasMoreResults = false;
@@ -2762,11 +3707,22 @@ function createSearchResultItem(song, index) {
     const actions = document.createElement("div");
     actions.className = "search-result-actions";
 
+    const favoriteButton = document.createElement("button");
+    favoriteButton.className = "action-btn favorite favorite-toggle";
+    favoriteButton.type = "button";
+    favoriteButton.title = "收藏";
+    favoriteButton.dataset.favoriteKey = getSongKey(song) || `search-${index}`;
+    favoriteButton.innerHTML = '<i class="far fa-heart"></i>';
+    favoriteButton.addEventListener("click", (event) => {
+        event.stopPropagation();
+        toggleFavorite(song);
+    });
+
     const playButton = document.createElement("button");
     playButton.className = "action-btn play";
     playButton.type = "button";
     playButton.title = "播放";
-    playButton.innerHTML = '<i class="fas fa-play"></i> 播放';
+    playButton.innerHTML = '<i class="fas fa-play"></i>';
     playButton.addEventListener("click", (event) => {
         event.stopPropagation();
         playSearchResult(index);
@@ -2804,6 +3760,7 @@ function createSearchResultItem(song, index) {
 
     downloadButton.appendChild(qualityMenu);
 
+    actions.appendChild(favoriteButton);
     actions.appendChild(playButton);
     actions.appendChild(downloadButton);
 
@@ -2864,6 +3821,9 @@ function updateImportSelectedButton() {
     const count = state.selectedSearchResults.size;
     button.disabled = count === 0;
     button.setAttribute("aria-disabled", count === 0 ? "true" : "false");
+    if (count === 0) {
+        closeImportSelectedMenu();
+    }
     const countLabel = dom.importSelectedCount;
     if (countLabel) {
         countLabel.textContent = count > 0 ? `(${count})` : "";
@@ -2900,7 +3860,44 @@ function resetSelectedSearchResults() {
     updateImportSelectedButton();
 }
 
-function importSelectedSearchResults() {
+function closeImportSelectedMenu() {
+    if (!dom.importSelectedMenu || !dom.importSelectedBtn) {
+        return;
+    }
+    if (!dom.importSelectedMenu.hasAttribute("hidden")) {
+        dom.importSelectedMenu.setAttribute("hidden", "");
+        dom.importSelectedBtn.setAttribute("aria-expanded", "false");
+    }
+    if (importSelectedMenuOutsideHandler) {
+        document.removeEventListener("click", importSelectedMenuOutsideHandler);
+        importSelectedMenuOutsideHandler = null;
+    }
+}
+
+function openImportSelectedMenu() {
+    if (!dom.importSelectedMenu || !dom.importSelectedBtn || dom.importSelectedBtn.disabled) {
+        return;
+    }
+    dom.importSelectedMenu.removeAttribute("hidden");
+    dom.importSelectedBtn.setAttribute("aria-expanded", "true");
+    if (importSelectedMenuOutsideHandler) {
+        document.removeEventListener("click", importSelectedMenuOutsideHandler);
+    }
+    importSelectedMenuOutsideHandler = (event) => {
+        if (!dom.importSelectedMenu || !dom.importSelectedBtn) {
+            return;
+        }
+        if (dom.importSelectedMenu.contains(event.target) || dom.importSelectedBtn.contains(event.target)) {
+            return;
+        }
+        closeImportSelectedMenu();
+    };
+    window.requestAnimationFrame(() => {
+        document.addEventListener("click", importSelectedMenuOutsideHandler);
+    });
+}
+
+function importSelectedSearchResults(target = "playlist") {
     ensureSelectedSearchResultsSet();
     if (state.selectedSearchResults.size === 0) {
         return;
@@ -2919,6 +3916,49 @@ function importSelectedSearchResults() {
     if (songsToAdd.length === 0) {
         resetSelectedSearchResults();
         showNotification("未找到可导入的歌曲", "warning");
+        return;
+    }
+
+    const processedIndices = [...indices];
+    state.selectedSearchResults.clear();
+    processedIndices.forEach(updateSearchResultSelectionUI);
+    updateImportSelectedButton();
+
+    if (target === "favorites") {
+        const favorites = ensureFavoriteSongsArray();
+        const existingKeys = new Set(
+            favorites
+                .map(getSongKey)
+                .filter((key) => typeof key === "string" && key !== "")
+        );
+
+        let added = 0;
+        let duplicates = 0;
+
+        songsToAdd.forEach((song) => {
+            const normalized = sanitizeImportedSong(song) || song;
+            const key = getSongKey(normalized);
+            if (key && existingKeys.has(key)) {
+                duplicates++;
+                return;
+            }
+            favorites.push(normalized);
+            if (key) {
+                existingKeys.add(key);
+            }
+            added++;
+        });
+
+        if (added > 0) {
+            saveFavoriteState();
+            renderFavorites();
+            const duplicateHint = duplicates > 0 ? `，${duplicates} 首已存在` : "";
+            showNotification(`成功导入 ${added} 首收藏歌曲${duplicateHint}`, "success");
+        } else {
+            updateFavoriteActionStates();
+            showNotification("选中的歌曲已在收藏列表中", "warning");
+        }
+        updateFavoriteIcons();
         return;
     }
 
@@ -2948,11 +3988,6 @@ function importSelectedSearchResults() {
         added++;
     });
 
-    const processedIndices = [...indices];
-    state.selectedSearchResults.clear();
-    processedIndices.forEach(updateSearchResultSelectionUI);
-    updateImportSelectedButton();
-
     if (added > 0) {
         renderPlaylist();
         const duplicateHint = duplicates > 0 ? `，${duplicates} 首已存在` : "";
@@ -2961,6 +3996,7 @@ function importSelectedSearchResults() {
         updatePlaylistActionStates();
         showNotification("选中的歌曲已在播放列表中", "warning");
     }
+    updateFavoriteIcons();
 }
 
 function createLoadMoreButton() {
@@ -3023,6 +4059,7 @@ function displaySearchResults(newItems, options = {}) {
     const appendedCount = itemsToAppend.length;
     const totalRendered = state.renderedSearchCount;
     debugLog(`显示搜索结果: 新增 ${appendedCount} 个结果, 总计 ${totalRendered} 个, 加载更多按钮: ${state.hasMoreResults ? "显示" : "隐藏"}`);
+    updateFavoriteIcons();
 }
 
 // 显示质量选择菜单
@@ -3078,6 +4115,8 @@ async function downloadWithQuality(event, index, type, quality) {
         song = state.onlineSongs[index];
     } else if (type === "playlist") {
         song = state.playlistSongs[index];
+    } else if (type === "favorites") {
+        song = state.favoriteSongs[index];
     }
 
     if (!song) return;
@@ -3123,11 +4162,13 @@ async function playSearchResult(index) {
             // 如果歌曲已存在，直接播放
             state.currentTrackIndex = existingIndex;
             state.currentPlaylist = "playlist";
+            state.currentList = "playlist";
         } else {
             // 如果歌曲不存在，添加到播放列表
             state.playlistSongs.push(song);
             state.currentTrackIndex = state.playlistSongs.length - 1;
             state.currentPlaylist = "playlist";
+            state.currentList = "playlist";
         }
 
         // 更新播放列表显示
@@ -3135,6 +4176,7 @@ async function playSearchResult(index) {
 
         // 播放歌曲
         await playSong(song);
+        updatePlayModeUI();
 
         showNotification(`正在播放: ${song.name}`);
 
@@ -3448,6 +4490,7 @@ function renderPlaylist() {
         dom.playlist.classList.add("empty");
         dom.playlistItems.innerHTML = "";
         savePlayerState();
+        updateFavoriteIcons();
         updatePlaylistHighlight();
         updateMobileClearPlaylistVisibility();
         updatePlaylistActionStates();
@@ -3455,23 +4498,138 @@ function renderPlaylist() {
     }
 
     dom.playlist.classList.remove("empty");
-    const playlistHtml = state.playlistSongs.map((song, index) =>
-        `<div class="playlist-item" data-index="${index}" role="button" tabindex="0" aria-label="播放 ${song.name}">
-            ${song.name} - ${Array.isArray(song.artist) ? song.artist.join(", ") : song.artist}
-            <button class="playlist-item-remove" type="button" data-playlist-action="remove" data-index="${index}" title="从播放列表移除">
-                <i class="fas fa-times"></i>
+    const playlistHtml = state.playlistSongs.map((song, index) => {
+        const artistValue = Array.isArray(song.artist)
+            ? song.artist.join(", ")
+            : (song.artist || "未知艺术家");
+        const songKey = getSongKey(song) || `playlist-${index}`;
+        return `
+        <div class="playlist-item" data-index="${index}" role="button" tabindex="0" aria-label="播放 ${song.name}" data-favorite-key="${songKey}">
+            ${song.name} - ${artistValue}
+            <button class="playlist-item-favorite action-btn favorite favorite-toggle" type="button" data-playlist-action="favorite" data-index="${index}" data-favorite-key="${songKey}" title="收藏" aria-label="收藏">
+                <i class="fa-regular fa-heart"></i>
             </button>
             <button class="playlist-item-download" type="button" data-playlist-action="download" data-index="${index}" title="下载">
                 <i class="fas fa-download"></i>
             </button>
-        </div>`
-    ).join("");
+            <button class="playlist-item-remove" type="button" data-playlist-action="remove" data-index="${index}" title="从播放列表移除">
+                <i class="fas fa-times"></i>
+            </button>
+        </div>`;
+    }).join("");
 
     dom.playlistItems.innerHTML = playlistHtml;
     savePlayerState();
+    updateFavoriteIcons();
     updatePlaylistHighlight();
     updateMobileClearPlaylistVisibility();
     updatePlaylistActionStates();
+}
+
+function ensureFavoriteSongsArray() {
+    if (!Array.isArray(state.favoriteSongs)) {
+        state.favoriteSongs = [];
+    }
+    return state.favoriteSongs;
+}
+
+function isSongFavorited(song) {
+    const key = getSongKey(song);
+    if (!key) {
+        return false;
+    }
+    return ensureFavoriteSongsArray().some((item) => getSongKey(item) === key);
+}
+
+function updateFavoriteIcons() {
+    const favorites = ensureFavoriteSongsArray();
+    const favoriteKeys = new Set(
+        favorites
+            .map(getSongKey)
+            .filter((key) => typeof key === "string" && key !== "")
+    );
+
+    const toggleButtons = document.querySelectorAll('.favorite-toggle[data-favorite-key]');
+    toggleButtons.forEach((button) => {
+        const key = button.dataset.favoriteKey;
+        const isActive = key && favoriteKeys.has(key);
+        button.classList.toggle('is-active', Boolean(isActive));
+        button.setAttribute('aria-pressed', isActive ? 'true' : 'false');
+        const icon = button.querySelector('i');
+        if (icon) {
+            icon.classList.toggle('fas', Boolean(isActive));
+            icon.classList.toggle('far', !isActive);
+            icon.classList.toggle('fa-solid', Boolean(isActive));
+            icon.classList.toggle('fa-regular', !isActive);
+        }
+        if (isActive) {
+            button.setAttribute('title', '取消收藏');
+            button.setAttribute('aria-label', '取消收藏');
+        } else {
+            button.setAttribute('title', '收藏');
+            button.setAttribute('aria-label', '收藏');
+        }
+    });
+
+    if (dom.currentFavoriteToggle) {
+        const currentSong = state.currentSong;
+        const key = currentSong ? getSongKey(currentSong) : null;
+        const isActive = key && favoriteKeys.has(key);
+        dom.currentFavoriteToggle.disabled = !currentSong;
+        dom.currentFavoriteToggle.setAttribute('aria-disabled', currentSong ? 'false' : 'true');
+        dom.currentFavoriteToggle.classList.toggle('is-active', Boolean(isActive));
+        dom.currentFavoriteToggle.setAttribute('aria-pressed', isActive ? 'true' : 'false');
+        const label = isActive ? '取消收藏当前歌曲' : '收藏当前歌曲';
+        dom.currentFavoriteToggle.setAttribute('aria-label', label);
+        dom.currentFavoriteToggle.setAttribute('title', label);
+        const icon = dom.currentFavoriteToggle.querySelector('i');
+        if (icon) {
+            icon.classList.toggle('fas', Boolean(isActive));
+            icon.classList.toggle('far', !isActive);
+            icon.classList.toggle('fa-solid', Boolean(isActive));
+            icon.classList.toggle('fa-regular', !isActive);
+        }
+    }
+}
+
+function switchLibraryTab(target) {
+    const showFavorites = target === "favorites";
+
+    if (Array.isArray(dom.libraryTabs) && dom.libraryTabs.length > 0) {
+        dom.libraryTabs.forEach((tab) => {
+            if (!(tab instanceof HTMLElement)) {
+                return;
+            }
+            const target = tab.dataset.target === "favorites" ? "favorites" : "playlist";
+            const isActive = showFavorites ? target === "favorites" : target === "playlist";
+            tab.classList.toggle("active", isActive);
+            tab.setAttribute("aria-selected", isActive ? "true" : "false");
+        });
+    }
+
+    if (dom.playlist) {
+        if (showFavorites) {
+            dom.playlist.classList.remove("active");
+            dom.playlist.setAttribute("hidden", "");
+        } else {
+            dom.playlist.classList.add("active");
+            dom.playlist.removeAttribute("hidden");
+        }
+    }
+
+    if (dom.favorites) {
+        if (showFavorites) {
+            dom.favorites.classList.add("active");
+            dom.favorites.removeAttribute("hidden");
+        } else {
+            dom.favorites.classList.remove("active");
+            dom.favorites.setAttribute("hidden", "");
+        }
+    }
+
+    updateMobileLibraryActionVisibility(showFavorites);
+    updateMobileClearPlaylistVisibility();
+    closeImportSelectedMenu();
 }
 
 // 新增：从播放列表移除歌曲
@@ -3539,6 +4697,402 @@ function removeFromPlaylist(index) {
     updatePlaylistActionStates();
     savePlayerState();
     showNotification("已从播放列表移除", "success");
+    clearLyricsIfLibraryEmpty();
+}
+
+function addSongToPlaylist(song) {
+    if (!song || typeof song !== "object") {
+        return false;
+    }
+    if (!Array.isArray(state.playlistSongs)) {
+        state.playlistSongs = [];
+    }
+    const key = getSongKey(song);
+    const exists = state.playlistSongs.some((item) => getSongKey(item) === key);
+    if (exists) {
+        return false;
+    }
+    state.playlistSongs.push(song);
+    return true;
+}
+
+function updateFavoriteActionStates() {
+    const hasFavorites = Array.isArray(state.favoriteSongs) && state.favoriteSongs.length > 0;
+    if (dom.exportFavoritesBtn) {
+        dom.exportFavoritesBtn.disabled = !hasFavorites;
+        dom.exportFavoritesBtn.setAttribute("aria-disabled", hasFavorites ? "false" : "true");
+    }
+    if (dom.mobileExportFavoritesBtn) {
+        dom.mobileExportFavoritesBtn.disabled = !hasFavorites;
+        dom.mobileExportFavoritesBtn.setAttribute("aria-disabled", hasFavorites ? "false" : "true");
+    }
+    if (dom.clearFavoritesBtn) {
+        dom.clearFavoritesBtn.disabled = !hasFavorites;
+        dom.clearFavoritesBtn.setAttribute("aria-disabled", hasFavorites ? "false" : "true");
+    }
+    if (dom.mobileClearFavoritesBtn) {
+        dom.mobileClearFavoritesBtn.disabled = !hasFavorites;
+        dom.mobileClearFavoritesBtn.setAttribute("aria-disabled", hasFavorites ? "false" : "true");
+    }
+    if (dom.addAllFavoritesBtn) {
+        dom.addAllFavoritesBtn.disabled = !hasFavorites;
+        dom.addAllFavoritesBtn.setAttribute("aria-disabled", hasFavorites ? "false" : "true");
+    }
+    if (dom.mobileAddAllFavoritesBtn) {
+        dom.mobileAddAllFavoritesBtn.disabled = !hasFavorites;
+        dom.mobileAddAllFavoritesBtn.setAttribute("aria-disabled", hasFavorites ? "false" : "true");
+    }
+}
+
+function renderFavorites() {
+    if (!dom.favoriteItems || !dom.favorites) {
+        return;
+    }
+
+    const favorites = ensureFavoriteSongsArray();
+
+    if (favorites.length === 0) {
+        dom.favorites.classList.add("empty");
+        dom.favoriteItems.innerHTML = "";
+        updateFavoriteIcons();
+        updateFavoriteActionStates();
+        return;
+    }
+
+    dom.favorites.classList.remove("empty");
+    const favoritesHtml = favorites.map((song, index) => {
+        const artistValue = Array.isArray(song.artist)
+            ? song.artist.join(", ")
+            : (song.artist || "未知艺术家");
+        const isCurrent = state.currentList === "favorite" && index === state.currentFavoriteIndex;
+        const songKey = getSongKey(song) || `favorite-${index}`;
+        return `
+        <div class="playlist-item${isCurrent ? " current" : ""}" data-index="${index}" role="button" tabindex="0" aria-label="播放 ${song.name}" data-favorite-key="${songKey}">
+            ${song.name} - ${artistValue}
+            <button class="favorite-item-action favorite-item-action--add" type="button" data-favorite-action="add" data-index="${index}" title="添加到播放列表" aria-label="添加到播放列表">
+                <i class="fas fa-plus"></i>
+            </button>
+            <button class="favorite-item-action favorite-item-action--download" type="button" data-favorite-action="download" data-index="${index}" title="下载" aria-label="下载">
+                <i class="fas fa-download"></i>
+            </button>
+            <button class="favorite-item-action favorite-item-action--remove" type="button" data-favorite-action="remove" data-index="${index}" title="从收藏列表移除" aria-label="从收藏列表移除">
+                <i class="fas fa-trash"></i>
+            </button>
+        </div>`;
+    }).join("");
+
+    dom.favoriteItems.innerHTML = favoritesHtml;
+    updateFavoriteHighlight();
+    updateFavoriteIcons();
+    updateFavoriteActionStates();
+}
+
+function updateFavoriteHighlight() {
+    if (!dom.favoriteItems) {
+        return;
+    }
+    const items = dom.favoriteItems.querySelectorAll(".playlist-item");
+    items.forEach((item, index) => {
+        const isCurrent = state.currentList === "favorite" && index === state.currentFavoriteIndex;
+        item.classList.toggle("current", isCurrent);
+        item.setAttribute("aria-current", isCurrent ? "true" : "false");
+        item.setAttribute("aria-pressed", isCurrent ? "true" : "false");
+    });
+}
+
+function removeFavoriteAtIndex(index) {
+    const favorites = ensureFavoriteSongsArray();
+    if (index < 0 || index >= favorites.length) {
+        return null;
+    }
+    const [removed] = favorites.splice(index, 1);
+
+    if (state.currentList === "favorite") {
+        if (state.currentFavoriteIndex === index) {
+            if (favorites.length === 0) {
+                state.currentFavoriteIndex = 0;
+                state.favoritePlaybackTime = 0;
+                state.favoriteLastSavedPlaybackTime = 0;
+                state.currentList = "playlist";
+                state.currentPlaylist = "playlist";
+                savePlayerState();
+            } else if (state.currentFavoriteIndex >= favorites.length) {
+                state.currentFavoriteIndex = favorites.length - 1;
+            }
+        } else if (state.currentFavoriteIndex > index) {
+            state.currentFavoriteIndex--;
+        }
+    }
+
+    saveFavoriteState();
+    renderFavorites();
+    updatePlayModeUI();
+    clearLyricsIfLibraryEmpty();
+    return removed;
+}
+
+function toggleFavorite(song) {
+    if (!song || typeof song !== "object") {
+        return;
+    }
+
+    const normalizedSong = sanitizeImportedSong(song) || { ...song };
+    const key = getSongKey(normalizedSong);
+    if (!key) {
+        showNotification("无法收藏该歌曲", "error");
+        return;
+    }
+
+    const favorites = ensureFavoriteSongsArray();
+    const existingIndex = favorites.findIndex((item) => getSongKey(item) === key);
+
+    if (existingIndex >= 0) {
+        removeFavoriteAtIndex(existingIndex);
+        showNotification("已从收藏列表移除", "success");
+    } else {
+        favorites.push(normalizedSong);
+        saveFavoriteState();
+        renderFavorites();
+        showNotification("已添加到收藏列表", "success");
+    }
+}
+
+async function playFavoriteSong(index) {
+    const favorites = ensureFavoriteSongsArray();
+    if (index < 0 || index >= favorites.length) {
+        return;
+    }
+
+    const song = favorites[index];
+    state.currentFavoriteIndex = index;
+    state.currentList = "favorite";
+    state.currentPlaylist = "favorites";
+
+    try {
+        await playSong(song);
+        updateFavoriteHighlight();
+        updatePlayModeUI();
+        saveFavoriteState();
+        if (isMobileView) {
+            closeMobilePanel();
+        }
+    } catch (error) {
+        console.error("播放收藏歌曲失败:", error);
+        showNotification("播放收藏歌曲失败", "error");
+    }
+}
+
+function addAllFavoritesToPlaylist() {
+    const favorites = ensureFavoriteSongsArray();
+    if (favorites.length === 0) {
+        showNotification("收藏列表为空", "warning");
+        return;
+    }
+
+    if (!Array.isArray(state.playlistSongs)) {
+        state.playlistSongs = [];
+    }
+
+    const existingKeys = new Set(
+        state.playlistSongs
+            .map(getSongKey)
+            .filter((key) => typeof key === "string" && key !== "")
+    );
+
+    let added = 0;
+    let duplicates = 0;
+
+    favorites.forEach((song) => {
+        const key = getSongKey(song);
+        if (key && existingKeys.has(key)) {
+            duplicates++;
+            return;
+        }
+        state.playlistSongs.push(song);
+        if (key) {
+            existingKeys.add(key);
+        }
+        added++;
+    });
+
+    if (added > 0) {
+        renderPlaylist();
+        const duplicateHint = duplicates > 0 ? `，${duplicates} 首已存在` : "";
+        showNotification(`已添加 ${added} 首收藏歌曲到播放列表${duplicateHint}`, "success");
+    } else {
+        updatePlaylistActionStates();
+        showNotification("收藏歌曲均已在播放列表中", "warning");
+    }
+}
+
+function clearFavorites() {
+    const favorites = ensureFavoriteSongsArray();
+    if (favorites.length === 0) {
+        showNotification("收藏列表为空", "warning");
+        return;
+    }
+
+    if (!window.confirm("确定清空收藏列表吗？")) {
+        return;
+    }
+
+    state.favoriteSongs = [];
+    state.currentFavoriteIndex = 0;
+    state.favoritePlaybackTime = 0;
+    state.favoriteLastSavedPlaybackTime = 0;
+    if (state.currentList === "favorite") {
+        state.currentList = "playlist";
+        state.currentPlaylist = "playlist";
+    }
+    saveFavoriteState();
+    savePlayerState();
+    renderFavorites();
+    updateFavoriteIcons();
+    updatePlayModeUI();
+    showNotification("收藏列表已清空", "success");
+    clearLyricsIfLibraryEmpty();
+}
+
+function exportFavorites() {
+    const favorites = ensureFavoriteSongsArray();
+    if (favorites.length === 0) {
+        showNotification("收藏列表为空，无法导出", "warning");
+        return;
+    }
+
+    try {
+        const payload = {
+            meta: {
+                app: "Solara",
+                version: FAVORITE_EXPORT_VERSION,
+                exportedAt: new Date().toISOString(),
+                itemCount: favorites.length,
+                type: "favorites"
+            },
+            items: favorites
+        };
+
+        const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
+        const url = URL.createObjectURL(blob);
+        const now = new Date();
+        const formattedTimestamp = `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, "0")}${String(now.getDate()).padStart(2, "0")}-${String(now.getHours()).padStart(2, "0")}${String(now.getMinutes()).padStart(2, "0")}${String(now.getSeconds()).padStart(2, "0")}`;
+        const anchor = document.createElement("a");
+        anchor.href = url;
+        anchor.download = `solara-favorites-${formattedTimestamp}.json`;
+        document.body.appendChild(anchor);
+        anchor.click();
+        document.body.removeChild(anchor);
+        URL.revokeObjectURL(url);
+        showNotification(`已导出 ${favorites.length} 首收藏歌曲`, "success");
+    } catch (error) {
+        console.error("导出收藏列表失败:", error);
+        showNotification("导出收藏列表失败", "error");
+    }
+}
+
+function handleImportedFavoriteItems(rawItems) {
+    const favorites = ensureFavoriteSongsArray();
+
+    const sanitizedSongs = rawItems
+        .map(sanitizeImportedSong)
+        .filter((song) => song && typeof song === "object");
+
+    if (sanitizedSongs.length === 0) {
+        throw new Error("NO_VALID_SONGS");
+    }
+
+    const existingKeys = new Set(
+        favorites
+            .map(getSongKey)
+            .filter((key) => typeof key === "string" && key !== "")
+    );
+
+    let added = 0;
+    let duplicates = 0;
+
+    sanitizedSongs.forEach((song) => {
+        const key = getSongKey(song);
+        if (key && existingKeys.has(key)) {
+            duplicates++;
+            return;
+        }
+        favorites.push(song);
+        if (key) {
+            existingKeys.add(key);
+        }
+        added++;
+    });
+
+    if (added > 0) {
+        saveFavoriteState();
+        renderFavorites();
+    } else {
+        updateFavoriteActionStates();
+        updateFavoriteIcons();
+    }
+
+    return { added, duplicates };
+}
+
+function handleImportFavoritesChange(event) {
+    const input = event?.target;
+    const file = input?.files?.[0];
+    if (!file) {
+        return;
+    }
+
+    const reader = new FileReader();
+    reader.onload = () => {
+        try {
+            const text = typeof reader.result === "string" ? reader.result : "";
+            if (!text) {
+                throw new Error("EMPTY_FILE");
+            }
+
+            const payload = parseJSON(text, null);
+            if (!payload) {
+                throw new Error("INVALID_JSON");
+            }
+
+            const meta = payload.meta || {};
+            if (meta.version && Number(meta.version) > FAVORITE_EXPORT_VERSION) {
+                console.warn("收藏列表文件版本较新，尝试兼容导入");
+            }
+
+            const items = Array.isArray(payload.items)
+                ? payload.items
+                : extractPlaylistItems(payload);
+
+            if (!Array.isArray(items) || items.length === 0) {
+                throw new Error("NO_SONGS");
+            }
+
+            const { added, duplicates } = handleImportedFavoriteItems(items);
+            if (added > 0) {
+                const duplicateHint = duplicates > 0 ? `，${duplicates} 首已存在` : "";
+                showNotification(`成功导入 ${added} 首收藏歌曲${duplicateHint}`, "success");
+            } else {
+                showNotification("文件中的歌曲已在收藏列表中", "warning");
+            }
+        } catch (error) {
+            console.error("导入收藏列表失败:", error);
+            showNotification("导入收藏列表失败，请确认文件格式", "error");
+        } finally {
+            if (input) {
+                input.value = "";
+            }
+        }
+    };
+
+    reader.onerror = () => {
+        console.error("读取收藏列表文件失败:", reader.error);
+        showNotification("无法读取收藏列表文件", "error");
+        if (input) {
+            input.value = "";
+        }
+    };
+
+    reader.readAsText(file, "utf-8");
 }
 
 // 新增：清空播放列表
@@ -3581,6 +5135,7 @@ function clearPlaylist() {
 
     savePlayerState();
     showNotification("播放列表已清空", "success");
+    clearLyricsIfLibraryEmpty();
 }
 
 // 新增：播放播放列表中的歌曲
@@ -3590,10 +5145,12 @@ async function playPlaylistSong(index) {
     const song = state.playlistSongs[index];
     state.currentTrackIndex = index;
     state.currentPlaylist = "playlist";
+    state.currentList = "playlist";
 
     try {
         await playSong(song);
         updatePlaylistHighlight();
+        updatePlayModeUI();
         if (isMobileView) {
             closeMobilePanel();
         }
@@ -3682,13 +5239,24 @@ async function playSong(song, options = {}) {
 
         dom.audioPlayer.pause();
 
-        if (!preserveProgress) {
-            state.currentPlaybackTime = 0;
-            state.lastSavedPlaybackTime = 0;
-            safeSetLocalStorage('currentPlaybackTime', '0');
-        } else if (startTime > 0) {
-            state.currentPlaybackTime = startTime;
-            state.lastSavedPlaybackTime = startTime;
+        if (state.currentList === "favorite") {
+            if (!preserveProgress) {
+                state.favoritePlaybackTime = 0;
+                state.favoriteLastSavedPlaybackTime = 0;
+                safeSetLocalStorage('favoritePlaybackTime', '0');
+            } else if (startTime > 0) {
+                state.favoritePlaybackTime = startTime;
+                state.favoriteLastSavedPlaybackTime = startTime;
+            }
+        } else {
+            if (!preserveProgress) {
+                state.currentPlaybackTime = 0;
+                state.lastSavedPlaybackTime = 0;
+                safeSetLocalStorage('currentPlaybackTime', '0');
+            } else if (startTime > 0) {
+                state.currentPlaybackTime = startTime;
+                state.lastSavedPlaybackTime = startTime;
+            }
         }
 
         state.pendingSeekTime = startTime > 0 ? startTime : null;
@@ -3820,7 +5388,8 @@ function autoPlayNext() {
         dom.audioPlayer.__solaraMediaSessionHandledEnded = false;
         return;
     }
-    if (state.playMode === "single") {
+    const mode = getActivePlayMode();
+    if (mode === "single") {
         // 单曲循环
         dom.audioPlayer.currentTime = 0;
         dom.audioPlayer.play();
@@ -3833,6 +5402,26 @@ function autoPlayNext() {
 
 // 修复：播放下一首 - 支持播放模式和统一播放列表
 function playNext() {
+    if (state.currentList === "favorite") {
+        const favorites = ensureFavoriteSongsArray();
+        if (favorites.length === 0) {
+            clearLyricsIfLibraryEmpty();
+            return;
+        }
+        const mode = state.favoritePlayMode || "list";
+        let nextIndex = state.currentFavoriteIndex;
+        if (mode === "random") {
+            nextIndex = Math.floor(Math.random() * favorites.length);
+        } else if (mode === "list") {
+            nextIndex = (state.currentFavoriteIndex + 1) % favorites.length;
+        }
+        if (mode !== "single") {
+            state.currentFavoriteIndex = nextIndex;
+        }
+        playFavoriteSong(state.currentFavoriteIndex);
+        return;
+    }
+
     let nextIndex = -1;
     let playlist = [];
 
@@ -3844,29 +5433,61 @@ function playNext() {
         playlist = state.searchResults;
     }
 
-    if (playlist.length === 0) return;
-
-    if (state.playMode === "random") {
-        // 随机播放
-        nextIndex = Math.floor(Math.random() * playlist.length);
-    } else {
-        // 列表循环
-        nextIndex = (state.currentTrackIndex + 1) % playlist.length;
+    if (playlist.length === 0) {
+        clearLyricsIfLibraryEmpty();
+        return;
     }
 
-    state.currentTrackIndex = nextIndex;
+    const mode = state.playMode || "list";
+    if (mode === "random") {
+        // 随机播放
+        nextIndex = Math.floor(Math.random() * playlist.length);
+    } else if (mode === "list") {
+        // 列表循环
+        nextIndex = (state.currentTrackIndex + 1) % playlist.length;
+    } else if (mode === "single") {
+        nextIndex = state.currentTrackIndex >= 0 ? state.currentTrackIndex : 0;
+    }
+
+    if (mode !== "single") {
+        state.currentTrackIndex = nextIndex;
+    }
+
+    const targetIndex = mode === "single" ? state.currentTrackIndex : nextIndex;
 
     if (state.currentPlaylist === "playlist") {
-        playPlaylistSong(nextIndex);
+        playPlaylistSong(targetIndex);
     } else if (state.currentPlaylist === "online") {
-        playOnlineSong(nextIndex);
+        playOnlineSong(targetIndex);
     } else if (state.currentPlaylist === "search") {
-        playSearchResult(nextIndex);
+        playSearchResult(targetIndex);
     }
 }
 
 // 修复：播放上一首 - 支持播放模式和统一播放列表
 function playPrevious() {
+    if (state.currentList === "favorite") {
+        const favorites = ensureFavoriteSongsArray();
+        if (favorites.length === 0) {
+            return;
+        }
+        const mode = state.favoritePlayMode || "list";
+        let prevIndex = state.currentFavoriteIndex;
+        if (mode === "random") {
+            prevIndex = Math.floor(Math.random() * favorites.length);
+        } else if (mode === "list") {
+            prevIndex = state.currentFavoriteIndex - 1;
+            if (prevIndex < 0) {
+                prevIndex = favorites.length - 1;
+            }
+        }
+        if (mode !== "single") {
+            state.currentFavoriteIndex = prevIndex;
+        }
+        playFavoriteSong(state.currentFavoriteIndex);
+        return;
+    }
+
     let prevIndex = -1;
     let playlist = [];
 
@@ -3880,23 +5501,30 @@ function playPrevious() {
 
     if (playlist.length === 0) return;
 
-    if (state.playMode === "random") {
+    const mode = state.playMode || "list";
+    if (mode === "random") {
         // 随机播放
         prevIndex = Math.floor(Math.random() * playlist.length);
-    } else {
+    } else if (mode === "list") {
         // 列表循环
         prevIndex = state.currentTrackIndex - 1;
         if (prevIndex < 0) prevIndex = playlist.length - 1;
+    } else if (mode === "single") {
+        prevIndex = state.currentTrackIndex >= 0 ? state.currentTrackIndex : 0;
     }
 
-    state.currentTrackIndex = prevIndex;
+    if (mode !== "single") {
+        state.currentTrackIndex = prevIndex;
+    }
+
+    const targetIndex = mode === "single" ? state.currentTrackIndex : prevIndex;
 
     if (state.currentPlaylist === "playlist") {
-        playPlaylistSong(prevIndex);
+        playPlaylistSong(targetIndex);
     } else if (state.currentPlaylist === "online") {
-        playOnlineSong(prevIndex);
+        playOnlineSong(targetIndex);
     } else if (state.currentPlaylist === "search") {
-        playSearchResult(prevIndex);
+        playSearchResult(targetIndex);
     }
 }
 
@@ -3907,10 +5535,12 @@ async function playOnlineSong(index) {
 
     state.currentTrackIndex = index;
     state.currentPlaylist = "online";
+    state.currentList = "playlist";
 
     try {
         await playSong(song);
         updateOnlineHighlight();
+        updatePlayModeUI();
     } catch (error) {
         console.error("播放失败:", error);
         showNotification("播放失败，请稍后重试", "error");
@@ -3930,39 +5560,133 @@ function updateOnlineHighlight() {
     });
 }
 
-// 修复：探索在线音乐 - 添加到统一播放列表
+const EXPLORE_RADAR_GENRES = [
+    "流行",
+    "摇滚",
+    "古典音乐",
+    "民谣",
+    "电子",
+    "爵士",
+    "说唱",
+    "乡村",
+    "蓝调",
+    "R&B",
+    "金属",
+    "嘻哈",
+    "轻音乐",
+];
+
+function pickRandomExploreGenre() {
+    if (!Array.isArray(EXPLORE_RADAR_GENRES) || EXPLORE_RADAR_GENRES.length === 0) {
+        return "流行";
+    }
+    const index = Math.floor(Math.random() * EXPLORE_RADAR_GENRES.length);
+    return EXPLORE_RADAR_GENRES[index];
+}
+
+const EXPLORE_RADAR_SOURCES = ["netease", "kuwo"];
+
+function pickRandomExploreSource() {
+    if (!Array.isArray(EXPLORE_RADAR_SOURCES) || EXPLORE_RADAR_SOURCES.length === 0) {
+        return "netease";
+    }
+    const index = Math.floor(Math.random() * EXPLORE_RADAR_SOURCES.length);
+    return EXPLORE_RADAR_SOURCES[index];
+}
+
+// 探索雷达：通过代理后端随机搜歌并刷新播放列表
 async function exploreOnlineMusic() {
-    const btn = dom.loadOnlineBtn;
-    const btnText = btn.querySelector(".btn-text");
-    const loader = btn.querySelector(".loader");
+    const desktopButton = dom.loadOnlineBtn;
+    const mobileButton = dom.mobileExploreButton;
+    const btnText = desktopButton ? desktopButton.querySelector(".btn-text") : null;
+    const loader = desktopButton ? desktopButton.querySelector(".loader") : null;
+
+    const setLoadingState = (isLoading) => {
+        if (desktopButton) {
+            desktopButton.disabled = isLoading;
+            desktopButton.classList.toggle("is-loading", Boolean(isLoading));
+            if (btnText) {
+                btnText.style.display = isLoading ? "none" : "";
+            }
+            if (loader) {
+                loader.style.display = isLoading ? "inline-flex" : "none";
+            }
+        }
+        if (mobileButton) {
+            mobileButton.disabled = isLoading;
+            mobileButton.setAttribute("aria-disabled", isLoading ? "true" : "false");
+        }
+    };
 
     try {
-        btn.disabled = true;
-        btnText.style.display = "none";
-        loader.style.display = "inline-block";
+        setLoadingState(true);
 
-        const songs = await API.getRadarPlaylist("3778678", { limit: 50, offset: 0 });
+        const randomGenre = pickRandomExploreGenre();
+        const source = pickRandomExploreSource();
+        const results = await API.search(randomGenre, source, 30, 1);
 
-        if (songs.length > 0) {
-            // 将在线音乐添加到统一播放列表
-            state.playlistSongs = [...state.playlistSongs, ...songs];
-            state.onlineSongs = songs; // 保留原有的在线音乐列表
+        if (!Array.isArray(results) || results.length === 0) {
+            showNotification("探索雷达：未找到歌曲", "error");
+            debugLog(`探索雷达未找到歌曲，关键词：${randomGenre}，音源：${source}`);
+            return;
+        }
 
-            // 更新播放列表显示
-            renderPlaylist();
+        const normalizedSongs = results.map((song) => ({
+            id: song.id,
+            name: song.name,
+            artist: Array.isArray(song.artist) ? song.artist.join(" / ") : (song.artist || "未知艺术家"),
+            album: song.album || "",
+            source: song.source || source,
+            lyric_id: song.lyric_id || song.id,
+            pic_id: song.pic_id || song.pic || "",
+            url_id: song.url_id,
+        }));
 
-            showNotification(`已加载 ${songs.length} 首探索雷达歌曲到播放列表`);
-            debugLog(`加载探索雷达播放列表成功: ${songs.length} 首歌曲`);
+        const existingSongs = Array.isArray(state.playlistSongs) ? state.playlistSongs.slice() : [];
+        const existingKeys = new Set(existingSongs
+            .map((song) => getSongKey(song))
+            .filter((key) => typeof key === "string" && key.length > 0));
+
+        const appendedSongs = [];
+        for (const song of normalizedSongs) {
+            const key = getSongKey(song);
+            if (key && existingKeys.has(key)) {
+                continue;
+            }
+            appendedSongs.push(song);
+            if (key) {
+                existingKeys.add(key);
+            }
+        }
+
+        if (appendedSongs.length === 0) {
+            showNotification("探索雷达：本次未找到新的歌曲，当前列表已包含这些曲目", "info");
+            debugLog(`探索雷达无新增歌曲，关键词：${randomGenre}`);
+            return;
+        }
+
+        state.playlistSongs = existingSongs.concat(appendedSongs);
+        state.onlineSongs = state.playlistSongs.slice();
+        state.currentPlaylist = "playlist";
+        state.currentList = "playlist";
+
+        renderPlaylist();
+        updatePlaylistHighlight();
+
+        showNotification(`探索雷达：新增${appendedSongs.length}首 ${randomGenre} 歌曲`);
+        debugLog(`探索雷达加载成功，关键词：${randomGenre}，音源：${source}，新增歌曲数：${appendedSongs.length}`);
+
+        const shouldAutoplay = existingSongs.length === 0 && state.playlistSongs.length > 0;
+        if (shouldAutoplay) {
+            await playPlaylistSong(0);
         } else {
-            showNotification("未找到在线音乐", "error");
+            savePlayerState();
         }
     } catch (error) {
-        console.error("加载在线音乐失败:", error);
-        showNotification("加载失败，请稍后重试", "error");
+        console.error("探索雷达错误:", error);
+        showNotification("探索雷达获取失败，请稍后重试", "error");
     } finally {
-        btn.disabled = false;
-        btnText.style.display = "flex";
-        loader.style.display = "none";
+        setLoadingState(false);
     }
 }
 
@@ -3978,12 +5702,14 @@ async function loadLyrics(song) {
             parseLyrics(lyricData.lyric);
             dom.lyrics.classList.remove("empty");
             dom.lyrics.dataset.placeholder = "default";
+            debugLog(`歌词加载成功: ${state.lyricsData.length} 行`);
         } else {
             setLyricsContentHtml("<div>暂无歌词</div>");
             dom.lyrics.classList.add("empty");
             dom.lyrics.dataset.placeholder = "message";
             state.lyricsData = [];
             state.currentLyricLine = -1;
+            debugLog("歌词加载失败: 无歌词数据");
         }
     } catch (error) {
         console.error("加载歌词失败:", error);
@@ -3992,6 +5718,7 @@ async function loadLyrics(song) {
         dom.lyrics.dataset.placeholder = "message";
         state.lyricsData = [];
         state.currentLyricLine = -1;
+        debugLog(`歌词加载失败: ${error}`);
     }
 }
 
@@ -4017,6 +5744,7 @@ function parseLyrics(lyricText) {
 
     state.lyricsData = lyrics.sort((a, b) => a.time - b.time);
     displayLyrics();
+    debugLog(`解析歌词完成: ${state.lyricsData.length} 行`);
 }
 
 function setLyricsContentHtml(html) {
@@ -4034,6 +5762,26 @@ function clearLyricsContent() {
     state.currentLyricLine = -1;
     if (isMobileView) {
         closeMobileInlineLyrics({ force: true });
+    }
+}
+
+function clearLyricsIfLibraryEmpty() {
+    const playlistEmpty = !Array.isArray(state.playlistSongs) || state.playlistSongs.length === 0;
+    const favoritesEmpty = !Array.isArray(state.favoriteSongs) || state.favoriteSongs.length === 0;
+    if (!playlistEmpty || !favoritesEmpty) {
+        return;
+    }
+
+    const player = dom.audioPlayer;
+    const hasActiveAudio = Boolean(player && player.src && !player.ended && !player.paused);
+    if (hasActiveAudio) {
+        return;
+    }
+
+    clearLyricsContent();
+    if (dom.lyrics) {
+        dom.lyrics.classList.add("empty");
+        dom.lyrics.dataset.placeholder = "default";
     }
 }
 
@@ -4131,7 +5879,6 @@ function scrollToCurrentLyric(element, containerOverride) {
         }
     }
 
-    debugLog(`歌词滚动: 元素在容器内偏移=${elementOffsetTop}, 容器高度=${containerHeight}, 目标滚动=${finalScrollTop}`);
 }
 
 // 修复：下载歌曲
@@ -4210,9 +5957,6 @@ function switchMobileView(view) {
     }
     if (isMobileView && document.body) {
         document.body.setAttribute("data-mobile-panel-view", view);
-        if (dom.mobilePanelTitle) {
-            dom.mobilePanelTitle.textContent = view === "lyrics" ? "歌词" : "播放列表";
-        }
         updateMobileClearPlaylistVisibility();
     }
 }

@@ -492,7 +492,8 @@
           <label for="password" class="field-label">访问口令</label>
           <div class="input-wrapper">
             <i class="fa-solid fa-lock" aria-hidden="true"></i>
-            <input type="password" id="password" placeholder="请输入密码" autocomplete="current-password" required>
+            <input type="password" id="password" placeholder="请输入密码" autocomplete="current-password" required
+              oninput="this.value = this.value.replace(/[^\x00-\x7F]/g, '')">
           </div>
         </div>
         <p class="login-hint">只有输入了正确口令的成员才能继续访问内容。</p>
