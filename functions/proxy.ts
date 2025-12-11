@@ -1,7 +1,4 @@
-// 这里配置默认的备用 API 地址
-// 注意：公共接口可能会失效，如果失效了，可以尝试换成 https://api.i-meto.com/meting/api
-const DEFAULT_API_URL = "https://api.i-meto.com/meting/api";
-
+const API_BASE_URL = "https://music-api.gdstudio.xyz/api.php";
 const KUWO_HOST_PATTERN = /(^|\.)kuwo\.cn$/i;
 const SAFE_RESPONSE_HEADERS = ["content-type", "cache-control", "accept-ranges", "content-length", "content-range", "etag", "last-modified", "expires"];
 
@@ -47,8 +44,6 @@ function normalizeKuwoUrl(rawUrl: string): URL | null {
     if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
       return null;
     }
-    // 强制把 protocol 转为 http 或保持原样，视具体需求而定
-    // 原代码强制转 http 可能是因为 upstream 限制
     parsed.protocol = "http:";
     return parsed;
   } catch {
@@ -88,17 +83,8 @@ async function proxyKuwoAudio(targetUrl: string, request: Request): Promise<Resp
   });
 }
 
-// 修改参数：增加 env 以支持环境变量
-async function proxyApiRequest(url: URL, request: Request, env?: any): Promise<Response> {
-  // 优先使用环境变量 API_URL，如果没有则使用代码顶部的默认地址
-  let apiBase = DEFAULT_API_URL;
-  if (env && env.API_URL) {
-    apiBase = env.API_URL;
-  }
-
-  // 确保 API 地址没有多余的斜杠问题
-  const apiUrl = new URL(apiBase);
-  
+async function proxyApiRequest(url: URL, request: Request): Promise<Response> {
+  const apiUrl = new URL(API_BASE_URL);
   url.searchParams.forEach((value, key) => {
     if (key === "target" || key === "callback") {
       return;
@@ -129,8 +115,7 @@ async function proxyApiRequest(url: URL, request: Request, env?: any): Promise<R
   });
 }
 
-// Cloudflare Pages Functions 入口
-export async function onRequest({ request, env }: { request: Request, env: any }): Promise<Response> {
+export async function onRequest({ request }: { request: Request }): Promise<Response> {
   if (request.method === "OPTIONS") {
     return handleOptions();
   }
@@ -146,6 +131,5 @@ export async function onRequest({ request, env }: { request: Request, env: any }
     return proxyKuwoAudio(target, request);
   }
 
-  // 将 env 传递给处理函数
-  return proxyApiRequest(url, request, env);
+  return proxyApiRequest(url, request);
 }
